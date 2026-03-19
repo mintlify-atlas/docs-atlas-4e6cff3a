@@ -1,0 +1,100 @@
+{
+  "projectType": "saas",
+  "projectName": "Sintesis",
+  "projectDescription": "A multi-tenant SaaS platform for construction companies to digitalize and manage projects (obras), centralize documents, automate data extraction via OCR/AI, and generate reports and alerts.",
+  "theme": "almond",
+  "primaryColor": "#fc6404",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/obras",
+              "features/documents",
+              "features/certificates",
+              "features/macro-tables",
+              "features/reports"
+            ]
+          },
+          {
+            "group": "Automation",
+            "pages": [
+              "automation/workflows",
+              "automation/ocr-extraction",
+              "automation/notifications"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "admin/tenants",
+              "admin/users-roles",
+              "admin/subscription-plans",
+              "admin/audit-log"
+            ]
+          },
+          {
+            "group": "Setup & Deployment",
+            "pages": [
+              "setup/environment",
+              "setup/supabase",
+              "setup/local-development"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "API Endpoints",
+            "pages": [
+              "api/overview",
+              "api/obras",
+              "api/certificados",
+              "api/notifications",
+              "api/reports",
+              "api/tenants",
+              "api/macro-tables"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-tenant architecture with role-based access control",
+    "Obra (construction project) lifecycle management",
+    "Centralized document storage and organization per project",
+    "AI-powered OCR and automatic data extraction from documents",
+    "Certificate management and generation with PDF rendering",
+    "Budget tracking, financial deviation detection, and reporting",
+    "Workflow automation with configurable flujo actions",
+    "Real-time notifications via in-app and WhatsApp",
+    "Macro tables for cross-project data aggregation",
+    "Subscription plans with per-tenant usage enforcement"
+  ],
+  "publicApiSurface": [
+    "GET/POST /api/obras",
+    "GET/POST /api/certificados",
+    "GET/POST /api/notifications",
+    "GET/POST /api/reports",
+    "GET/POST /api/tenants",
+    "GET/POST /api/macro-tables",
+    "POST /api/flujo-actions",
+    "POST /api/pdf-render",
+    "GET/POST /api/jobs",
+    "POST /api/contact",
+    "GET /api/health",
+    "GET/POST /api/tenant-usage"
+  ]
+}
