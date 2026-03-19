@@ -1,0 +1,121 @@
+---
+title: "Notifications"
+description: "Endpoint for emitting notification events and delivering in-app notifications."
+---
+
+The notifications system is event-driven. Emitting an event causes the notification engine to evaluate registered rules and deliver notifications through the appropriate channels (in-app, email, WhatsApp).
+
+---
+
+## Emit a notification event
+
+<ParamField path="POST /api/notifications/emit" type="string" />
+
+Emits a named notification event with an optional context payload. The notification engine expands the event into one or more delivery effects based on registered rules.
+
+### Authentication
+
+This endpoint accepts two modes:
+
+- **Signed requests** — the request body must be signed with the shared `REQUEST_SIGNING_SECRET`. The signature is verified before processing.
+- **Unsigned requests** — available when the `REQUEST_SIGNING_DISABLED=1` environment variable is set (development/testing only).
+
+<Warning>
+Do not disable request signing in production. Unsigned requests bypass the signature verification that prevents unauthorized event injection.
+</Warning>
+
+### Workflow mode
+
+When Inngest workflows are enabled (`WORKFLOWS_DISABLED` is not `1`, or `WORKFLOWS_ENABLED=1`), the event is queued for asynchronous processing and the endpoint returns immediately. Otherwise, effects are evaluated synchronously and in-app notifications are inserted directly.
+
+### Request body
+
+<ParamField body="type" type="string" required>
+  The event type identifier. Must match a registered notification rule. Examples: `obra.completed`, `flujo.action.triggered`, `pendiente.due`.
+</ParamField>
+
+<ParamField body="ctx" type="object">
+  Context object passed to the notification rules. Shape depends on the event type.
+  <Expandable title="Common context fields">
+    <ParamField body="tenantId" type="string | null">UUID of the tenant. If absent from `ctx` but present in the signed request metadata, it is merged automatically.</ParamField>
+    <ParamField body="actorId" type="string | null">UUID of the user who triggered the event.</ParamField>
+    <ParamField body="recipientId" type="string | null">UUID of the intended recipient user.</ParamField>
+  </Expandable>
+</ParamField>
+
+### Response — workflow mode
+
+<ResponseField name="ok" type="boolean" required>Always `true`.</ResponseField>
+<ResponseField name="workflow" type="string" required>Always `"queued"` in workflow mode.</ResponseField>
+
+### Response — direct delivery mode
+
+<ResponseField name="ok" type="boolean" required>Always `true`.</ResponseField>
+<ResponseField name="delivered" type="boolean" required>Always `true` when effects were processed.</ResponseField>
+<ResponseField name="inserted" type="number" required>Number of `notifications` rows inserted.</ResponseField>
+
+### Error responses
+
+| Status | Description |
+|--------|-------------|
+| `400` | Validation error — `type` is missing or the body is malformed. |
+| `401` | Request signature is invalid or missing. |
+| `500` | Internal error during event processing. |
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X POST 'https://<domain>/api/notifications/emit' \
+      --header 'Content-Type: application/json' \
+      --header 'x-signature: <hmac-signature>' \
+      --data '{
+        "type": "obra.completed",
+        "ctx": {
+          "tenantId": "tenant-uuid-...",
+          "actorId": "user-uuid-...",
+          "obra": {
+            "id": "obra-uuid-...",
+            "name": "Escuela N° 42",
+            "percentage": 100
+          }
+        }
+      }'
+    ```
+  </Tab>
+  <Tab title="Response (workflow mode)">
+    ```json
+    {
+      "ok": true,
+      "workflow": "queued"
+    }
+    ```
+  </Tab>
+  <Tab title="Response (direct mode)">
+    ```json
+    {
+      "ok": true,
+      "delivered": true,
+      "inserted": 2
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Notification schema
+
+Notifications are stored in the `notifications` table and governed by per-user Row Level Security — users can only read and modify their own notifications.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | `uuid` | Primary key. |
+| `user_id` | `uuid` | Recipient user. |
+| `tenant_id` | `uuid \| null` | Tenant scope. |
+| `title` | `text` | Notification title. |
+| `body` | `text \| null` | Notification body text. |
+| `type` | `text` | Notification type (`info`, `warning`, `error`, etc.). |
+| `action_url` | `text \| null` | Deep link for the notification action. |
+| `data` | `jsonb` | Arbitrary metadata payload. |
+| `read_at` | `timestamptz \| null` | Timestamp when the user read the notification; `null` if unread. |
+| `created_at` | `timestamptz` | Creation timestamp. |

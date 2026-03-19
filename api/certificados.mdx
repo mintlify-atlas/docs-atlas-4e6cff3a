@@ -1,0 +1,226 @@
+---
+title: "Certificados"
+description: "Endpoints for managing billing certificates across all obras in a tenant."
+---
+
+Certificados (certificates) represent billing milestones linked to obras. They track expedient numbers, amounts, billing months, invoice data, and payment status.
+
+<Note>
+Certificates can also be managed through the obra-scoped endpoints (`GET /api/obras/{id}/certificates` and `POST /api/obras/{id}/certificates`). The endpoints documented here operate across all obras in the tenant.
+</Note>
+
+---
+
+## List all certificates
+
+<ParamField path="GET /api/certificados" type="string" />
+
+Returns a paginated, filtered, and sorted list of all certificates across the authenticated user's active tenant. Obra name and contracting entity are joined and included in each result.
+
+### Query parameters
+
+<ParamField query="page" type="number" default="1">
+  Page number (1-indexed).
+</ParamField>
+
+<ParamField query="limit" type="number" default="50">
+  Results per page. Clamped between `1` and `500`.
+</ParamField>
+
+<ParamField query="orderBy" type="string" default="obra">
+  Sort column. Accepted values: `obra` (obra name), `ente` (contracting entity), `monto`, `n_exp`.
+</ParamField>
+
+<ParamField query="orderDir" type="string" default="asc">
+  Sort direction: `asc` or `desc`.
+</ParamField>
+
+<ParamField query="q" type="string">
+  Full-text search across obra name, contracting entity, expedient number, status, month, amount, certificate number, invoice number, concept, observations, billing date, expiry date, and payment date. Diacritics are normalized.
+</ParamField>
+
+### Response
+
+<ResponseField name="certificados" type="FlatCertificate[]" required>
+  Paginated array of certificate objects joined with obra data.
+  <Expandable title="FlatCertificate properties">
+    <ResponseField name="id" type="string" required>UUID of the certificate.</ResponseField>
+    <ResponseField name="obraId" type="string" required>UUID of the parent obra.</ResponseField>
+    <ResponseField name="obraName" type="string" required>Name and location of the obra.</ResponseField>
+    <ResponseField name="ente" type="string" required>Contracting entity of the obra.</ResponseField>
+    <ResponseField name="n_exp" type="string" required>Expedient number.</ResponseField>
+    <ResponseField name="n_certificado" type="number" required>Certificate sequence number.</ResponseField>
+    <ResponseField name="monto" type="number" required>Certificate amount.</ResponseField>
+    <ResponseField name="mes" type="string" required>Billing month.</ResponseField>
+    <ResponseField name="estado" type="string" required>Certificate status.</ResponseField>
+    <ResponseField name="facturado" type="boolean" required>Whether the certificate has been invoiced.</ResponseField>
+    <ResponseField name="fecha_facturacion" type="string | null">Invoice date (ISO 8601).</ResponseField>
+    <ResponseField name="nro_factura" type="string | null">Invoice number.</ResponseField>
+    <ResponseField name="concepto" type="string | null">Invoice concept / description.</ResponseField>
+    <ResponseField name="cobrado" type="boolean" required>Whether payment has been received.</ResponseField>
+    <ResponseField name="observaciones" type="string | null">Free-text observations.</ResponseField>
+    <ResponseField name="vencimiento" type="string | null">Payment due date.</ResponseField>
+    <ResponseField name="fecha_pago" type="string | null">Actual payment date.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="pagination" type="object" required>
+  <Expandable title="Pagination properties">
+    <ResponseField name="page" type="number" />
+    <ResponseField name="limit" type="number" />
+    <ResponseField name="total" type="number" />
+    <ResponseField name="totalPages" type="number" />
+    <ResponseField name="hasNextPage" type="boolean" />
+    <ResponseField name="hasPreviousPage" type="boolean" />
+  </Expandable>
+</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/certificados?page=1&limit=10&orderBy=monto&orderDir=desc' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "certificados": [
+        {
+          "id": "cert-uuid-...",
+          "obraId": "obra-uuid-...",
+          "obraName": "Escuela N° 42 — Barrio Norte",
+          "ente": "MUNICIPIO",
+          "n_exp": "EXP-2024-001",
+          "n_certificado": 3,
+          "monto": 850000,
+          "mes": "junio 2024",
+          "estado": "CERTIFICADO",
+          "facturado": true,
+          "fecha_facturacion": "2024-06-20",
+          "nro_factura": "A-0001-00000123",
+          "concepto": "Certificado de avance N° 3",
+          "cobrado": false,
+          "observaciones": null,
+          "vencimiento": "2024-07-20",
+          "fecha_pago": null
+        }
+      ],
+      "pagination": {
+        "page": 1,
+        "limit": 10,
+        "total": 1,
+        "totalPages": 1,
+        "hasNextPage": false,
+        "hasPreviousPage": false
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Update a certificate
+
+<ParamField path="PATCH /api/certificados/{id}" type="string" />
+
+Partially updates a certificate. Only billing and payment tracking fields are editable through this endpoint.
+
+<Note>
+Core certificate fields (`n_exp`, `n_certificado`, `monto`, `mes`, `estado`) are set at creation time through the obra-scoped endpoint and cannot be changed via this PATCH. The allowed fields are restricted to billing and payment tracking.
+</Note>
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the certificate.</ParamField>
+
+### Request body
+
+Supply any subset of the following fields:
+
+<ParamField body="facturado" type="boolean">Whether the certificate has been invoiced.</ParamField>
+<ParamField body="fecha_facturacion" type="string">Invoice date.</ParamField>
+<ParamField body="nro_factura" type="string">Invoice number.</ParamField>
+<ParamField body="concepto" type="string">Invoice concept.</ParamField>
+<ParamField body="cobrado" type="boolean">Whether payment has been received.</ParamField>
+<ParamField body="observaciones" type="string">Free-text observations.</ParamField>
+<ParamField body="vencimiento" type="string">Payment due date.</ParamField>
+<ParamField body="fecha_pago" type="string">Actual payment date.</ParamField>
+
+<Warning>
+Requests that contain no recognised fields return `400 Bad Request` with `{ "error": "No hay campos válidos para actualizar" }`.
+</Warning>
+
+### Response
+
+<ResponseField name="certificate" type="Certificate" required>The full updated certificate row as stored in the database.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X PATCH 'https://<domain>/api/certificados/cert-uuid-...' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "cobrado": true,
+        "fecha_pago": "2024-07-18"
+      }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "certificate": {
+        "id": "cert-uuid-...",
+        "obra_id": "obra-uuid-...",
+        "n_exp": "EXP-2024-001",
+        "n_certificado": 3,
+        "monto": 850000,
+        "mes": "junio 2024",
+        "estado": "CERTIFICADO",
+        "facturado": true,
+        "fecha_facturacion": "2024-06-20",
+        "nro_factura": "A-0001-00000123",
+        "concepto": "Certificado de avance N° 3",
+        "cobrado": true,
+        "observaciones": null,
+        "vencimiento": "2024-07-20",
+        "fecha_pago": "2024-07-18",
+        "created_at": "2024-06-01T00:00:00Z",
+        "updated_at": "2024-07-18T14:00:00Z"
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Delete a certificate
+
+<ParamField path="DELETE /api/certificados/{id}" type="string" />
+
+Permanently deletes a certificate. The certificate must belong to an obra within the authenticated user's active tenant.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the certificate.</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>Always `true` on success.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X DELETE 'https://<domain>/api/certificados/cert-uuid-...' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    { "success": true }
+    ```
+  </Tab>
+</Tabs>

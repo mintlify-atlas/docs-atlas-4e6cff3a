@@ -1,0 +1,148 @@
+---
+title: "Obras"
+description: "Manage your construction project records in Sintesis — the central obras dashboard with inline editing, CSV import, and real-time progress tracking."
+---
+
+An **obra** (construction project) is the primary record in Sintesis. Every document, certificate, and report in the platform is attached to an obra. The obras dashboard gives your team a single, editable view of all active and historical projects across your tenant.
+
+## What is an obra?
+
+An obra represents a construction contract awarded to your firm. It captures the project's identity, the contracting authority, contractual financial amounts, timeline, and the current physical progress percentage. All obra data is scoped to your tenant — other tenants cannot read or write your records.
+
+## The obras dashboard
+
+Navigate to **Panel de obras** (`/excel`) to see all obras for your tenant in a spreadsheet-style grid.
+
+### Dashboard features
+
+<CardGroup cols={2}>
+  <Card title="Inline editing" icon="pencil">
+    Click any cell to edit it directly. Changes are saved on blur or Enter. Currency and number fields are formatted with Argentine locale (`es-AR`).
+  </Card>
+  <Card title="Inline search" icon="magnifying-glass">
+    Use the search bar to filter obras by designation, contracting entity, or any visible column. Search normalizes diacritics so `ñ` and `n` match interchangeably.
+  </Card>
+  <Card title="Tab filters" icon="filter">
+    Predefined tab filters let you quickly segment obras (e.g., in-progress, completed). Tabs are configurable per tenant.
+  </Card>
+  <Card title="Column menu" icon="table-columns">
+    Show, hide, pin, or resize columns from the columns menu. Custom columns configured by your admin appear here too.
+  </Card>
+</CardGroup>
+
+<Note>
+  On mobile, the obras dashboard switches to a card list view with a progress bar for each obra's `porcentaje` field.
+</Note>
+
+## Obra schema
+
+The following fields are stored in the `public.obras` table. All numeric monetary fields are stored in ARS (Argentine pesos) unless otherwise noted.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key, auto-generated. |
+| `tenant_id` | `uuid` | The tenant this obra belongs to. |
+| `n` | `integer` | Sequential obra number. Unique per tenant. |
+| `designacion_y_ubicacion` | `text` | Project name and location description. |
+| `sup_de_obra_m2` | `numeric` | Built surface area in square metres. |
+| `entidad_contratante` | `text` | Name of the contracting authority or client. |
+| `mes_basico_de_contrato` | `text` | Base contract month (reference price month). |
+| `iniciacion` | `text` | Project start date. |
+| `contrato_mas_ampliaciones` | `numeric` | Original contract value plus approved amendments. |
+| `certificado_a_la_fecha` | `numeric` | Total certified to date (cumulative). |
+| `saldo_a_certificar` | `numeric` | Remaining balance to certify (`contrato_mas_ampliaciones − certificado_a_la_fecha`). |
+| `segun_contrato` | `integer` | Original contractual term (months). |
+| `prorrogas_acordadas` | `integer` | Extensions granted (months). |
+| `plazo_total` | `integer` | Total term including extensions (`segun_contrato + prorrogas_acordadas`). |
+| `plazo_transc` | `integer` | Elapsed term in months. |
+| `porcentaje` | `numeric` | Physical completion percentage (0–100). |
+| `created_at` | `timestamptz` | Record creation timestamp. |
+| `updated_at` | `timestamptz` | Last update timestamp (auto-updated by trigger). |
+
+<Tip>
+  `certificado_a_la_fecha` and `saldo_a_certificar` can be derived automatically from the Certificados Extraídos tabla when OCR-extracted certificate data is available. Sintesis will suggest derived values and warn you before overwriting manually entered figures.
+</Tip>
+
+## Creating an obra
+
+<Steps>
+  <Step title="Open the obras dashboard">
+    Go to **Panel de obras** in the sidebar. The table loads with all existing obras for your tenant.
+  </Step>
+  <Step title="Add a new row">
+    Click the **+ Add** button in the toolbar to insert a blank row at the bottom of the table.
+  </Step>
+  <Step title="Fill in required fields">
+    At minimum you must enter:
+    - **Designación y ubicación** — project name and location
+    - **Entidad contratante** — the contracting authority
+    - **Mes básico de contrato** — the reference price month
+    - **Iniciación** — start date
+
+    All other fields default to `0`.
+  </Step>
+  <Step title="Save">
+    Click outside the row or press **Enter** to commit the new obra. The record is created immediately in Supabase.
+  </Step>
+</Steps>
+
+## Editing an obra
+
+Click any editable cell in the obras table to enter edit mode. The cell type determines the input:
+
+| Cell type | Behaviour |
+|---|---|
+| `text` | Free-text input |
+| `number` | Numeric input with `es-AR` locale formatting |
+| `currency` | Numeric input formatted as ARS currency |
+| `checkbox` / `boolean` | Toggle control (Sí / No) |
+
+For detailed per-obra editing — including certificates, documents, and tablas — open an obra by clicking its row or navigating to `/excel/[obraId]`.
+
+## Importing obras from CSV
+
+You can bulk-import obras from a semicolon-delimited CSV file exported from your existing system.
+
+<Steps>
+  <Step title="Prepare your CSV">
+    Your CSV must use `;` as the delimiter. Sintesis supports single-row and multi-row (3-row) headers. Required columns are:
+
+    | CSV header (or alias) | Maps to field |
+    |---|---|
+    | `designacionYUbicacion` / `designacion` | `designacion_y_ubicacion` |
+    | `entidadContratante` / `entidad` | `entidad_contratante` |
+    | `mesBasicoDeContrato` / `mesBasico` | `mes_basico_de_contrato` |
+    | `iniciacion` / `inicio` | `iniciacion` |
+
+    Optional columns like `porcentaje`, `contratoMasAmpliaciones`, `plazoTotal`, etc. are mapped automatically if present.
+  </Step>
+  <Step title="Click Import CSV">
+    In the obras dashboard toolbar, click **Importar CSV** and select your file. Sintesis decodes both UTF-8 and Windows-1252 encodings automatically.
+  </Step>
+  <Step title="Review the preview">
+    A slide-over panel shows the first 5 rows of the parsed import. Review the mapping before committing.
+  </Step>
+  <Step title="Confirm the import">
+    Click **Confirmar importación**. Obras are appended with sequential `n` values starting after the current maximum. Rows with missing required fields are skipped and a count is shown in the notification.
+  </Step>
+</Steps>
+
+<Warning>
+  The CSV importer appends new obras — it does not update existing records. Use inline editing to modify existing obras after import.
+</Warning>
+
+## Row-level security
+
+All obra operations (select, insert, update, delete) are enforced by Supabase Row Level Security policies. A user can only access obras that belong to the tenant they are a member of.
+
+```sql
+-- Example: read policy
+CREATE POLICY "Users can view obras from their tenant"
+  ON public.obras FOR SELECT
+  USING (
+    tenant_id IN (
+      SELECT tenant_id FROM public.memberships
+      WHERE user_id = auth.uid()
+    )
+  );
+```

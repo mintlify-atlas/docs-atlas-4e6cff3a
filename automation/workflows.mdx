@@ -1,0 +1,379 @@
+---
+title: "Workflows"
+description: "Automate post-completion actions on obras using configurable flujo actions and Vercel Workflow-backed scheduling."
+---
+
+Sintesis uses a **flujo actions** system to trigger automated effects — emails and calendar events — when an obra reaches 100% completion. Actions are configured per obra, support flexible timing modes, and are tracked through a full execution lifecycle.
+
+## How it works
+
+When an obra's `porcentaje` reaches 100, the system iterates over all enabled `obra_flujo_actions` for that obra, creates one `obra_flujo_executions` record per (action × recipient) pair, and starts a Vercel Workflow job that sleeps until the calculated delivery time, then delivers the notification.
+
+```
+Obra reaches 100%
+        │
+        ▼
+  flujo actions fetched
+  for obra_id
+        │
+        ├─ for each action × recipient
+        │        │
+        │        ▼
+        │   obra_flujo_executions  ←── status: pending
+        │        │
+        │        ▼
+        │   emitEvent("flujo.action.triggered", ...)
+        │        │
+        │        ▼
+        │   Vercel Workflow started  ─── workflow_run_id stored
+        │        │
+        │        ▼
+        │   sleep(executeAt)
+        │        │
+        │        ▼
+        │   deliver in-app / email
+        │        │
+        │        ▼
+        └── execution status → completed / failed
+```
+
+## The flujo actions schema
+
+### `obra_flujo_actions`
+
+Stores the action templates configured for each obra.
+
+```sql
+CREATE TABLE obra_flujo_actions (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id         UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  obra_id           UUID NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+
+  -- Action type
+  action_type       TEXT NOT NULL CHECK (action_type IN ('email', 'calendar_event')),
+
+  -- When to fire
+  timing_mode       TEXT NOT NULL CHECK (timing_mode IN ('immediate', 'offset', 'scheduled')),
+  offset_value      INTEGER,
+  offset_unit       TEXT CHECK (offset_unit IN ('minutes', 'hours', 'days', 'weeks', 'months')),
+  scheduled_date    TIMESTAMPTZ,
+
+  -- Content
+  title             TEXT NOT NULL,
+  message           TEXT,
+
+  -- Recipients (always includes the creating user)
+  recipient_user_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[],
+
+  enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW(),
+  created_by        UUID REFERENCES auth.users(id)
+);
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `action_type` | `text` | `email` or `calendar_event` |
+| `timing_mode` | `text` | `immediate`, `offset`, or `scheduled` |
+| `offset_value` | `integer` | Numeric offset amount (used with `offset` mode) |
+| `offset_unit` | `text` | `minutes`, `hours`, `days`, `weeks`, or `months` |
+| `scheduled_date` | `timestamptz` | Absolute delivery date (used with `scheduled` mode) |
+| `recipient_user_ids` | `uuid[]` | Array of user IDs to notify; creating user is always included |
+
+### `obra_flujo_executions`
+
+Tracks individual delivery attempts per action per recipient.
+
+```sql
+CREATE TABLE obra_flujo_executions (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  flujo_action_id      UUID NOT NULL REFERENCES obra_flujo_actions(id) ON DELETE CASCADE,
+  obra_id              UUID NOT NULL REFERENCES obras(id) ON DELETE CASCADE,
+  recipient_user_id    UUID REFERENCES auth.users(id),
+  scheduled_for        TIMESTAMPTZ,           -- when the notification is due
+  notification_types   TEXT[] DEFAULT '{}',   -- ['in_app', 'email']
+  status               TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
+  error_message        TEXT,
+  workflow_run_id      TEXT,                  -- Vercel Workflow run ID for cancellation
+  executed_at          TIMESTAMPTZ,
+  created_at           TIMESTAMPTZ DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+<Note>
+An action is considered fully delivered only when **all** its execution records have `status = 'completed'`. If any record is still `pending` or has `failed`, the action is shown as not yet completed in the UI.
+</Note>
+
+## Timing modes
+
+<Tabs>
+  <Tab title="immediate">
+    The notification fires as soon as the obra reaches 100%.
+
+    ```json
+    {
+      "timingMode": "immediate"
+    }
+    ```
+  </Tab>
+  <Tab title="offset">
+    The notification fires a fixed interval after the obra reaches 100%.
+    Offset is calculated from the original trigger time — not from when the action was created or last edited.
+
+    ```json
+    {
+      "timingMode": "offset",
+      "offsetValue": 3,
+      "offsetUnit": "days"
+    }
+    ```
+
+    Supported units: `minutes`, `hours`, `days`, `weeks`, `months`.
+  </Tab>
+  <Tab title="scheduled">
+    The notification fires at a specific absolute date and time.
+    If the scheduled date is already in the past at trigger time, delivery happens immediately.
+
+    ```json
+    {
+      "timingMode": "scheduled",
+      "scheduledDate": "2026-06-01T09:00:00.000Z"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Configuring a flujo action via the API
+
+### Create an action
+
+```bash
+POST /api/flujo-actions
+Content-Type: application/json
+
+{
+  "obraId": "<uuid>",
+  "actionType": "email",
+  "timingMode": "offset",
+  "offsetValue": 7,
+  "offsetUnit": "days",
+  "title": "Obra completada — seguimiento 7 días",
+  "message": "Han pasado 7 días desde que la obra alcanzó el 100%.",
+  "recipientUserIds": ["<uuid>", "<uuid>"],
+  "notificationTypes": ["in_app", "email"]
+}
+```
+
+If the obra is **already at 100%** when the action is created, the workflow is enqueued immediately so the new action fires on the same timeline as if it had been configured earlier.
+
+### Update (and reschedule) an action
+
+```bash
+PUT /api/flujo-actions
+Content-Type: application/json
+
+{
+  "id": "<action-uuid>",
+  "offsetValue": 14,
+  "offsetUnit": "days"
+}
+```
+
+When timing fields change, the system:
+
+<Steps>
+  <Step title="Fetch pending executions">
+    All `obra_flujo_executions` records for this action with `status = 'pending'` are loaded, including their `workflow_run_id`.
+  </Step>
+  <Step title="Cancel running workflows">
+    Each stored `workflow_run_id` is cancelled via `cancelWorkflowRun()` so the sleeping Vercel Workflow job is stopped before it delivers a stale notification.
+  </Step>
+  <Step title="Delete old executions">
+    The stale `pending` execution records are deleted from the database.
+  </Step>
+  <Step title="Create new executions">
+    New `obra_flujo_executions` records are inserted using the **original trigger time** (when the obra hit 100%) combined with the **new timing settings** to compute the correct `scheduled_for` timestamp.
+  </Step>
+  <Step title="Start new workflows">
+    A new `flujo.action.triggered` event is emitted for each recipient, a new Vercel Workflow is started, and the new `workflow_run_id` is stored for future rescheduling.
+  </Step>
+</Steps>
+
+### Delete an action
+
+```bash
+DELETE /api/flujo-actions?id=<action-uuid>
+```
+
+Deleting an action cascades to all its execution records via `ON DELETE CASCADE`.
+
+### List actions for an obra
+
+```bash
+GET /api/flujo-actions?obraId=<obra-uuid>
+```
+
+Returns each action enriched with computed timing fields:
+
+| Field | Description |
+|---|---|
+| `triggered_at` | When the obra first reached 100% (earliest execution's `created_at`) |
+| `scheduled_for` | When the latest delivery is due (`scheduled_for` of the most recent execution) |
+| `executed_at` | When all executions completed (populated only when all are `completed`) |
+
+## The notification engine
+
+Flujo actions are integrated into Sintesis's generic notification engine (`lib/notifications/engine.ts`). The rule for `flujo.action.triggered` drives both the `in-app` and `email` channels:
+
+```typescript
+// lib/notifications/rules.ts
+defineRule("flujo.action.triggered", {
+  recipients: async (ctx) => {
+    const recipientId = ctx.recipientId as string | undefined;
+    return recipientId ? [recipientId] : [];
+  },
+  effects: [
+    {
+      channel: "in-app",
+      shouldSend: (ctx) => {
+        const types = getNotificationTypes(ctx);
+        return types.length === 0 || types.includes("in_app");
+      },
+      when: (ctx) => {
+        if (!ctx.executeAt) return "now";
+        const at = new Date(ctx.executeAt);
+        return Number.isNaN(at.getTime()) ? "now" : at;
+      },
+      title: (ctx) => ctx.title || "Flujo action",
+      body: (ctx) => ctx.message || "",
+      actionUrl: (ctx) => (ctx.obraId ? `/excel/${ctx.obraId}` : null),
+      type: "flujo_email",
+    },
+    {
+      channel: "email",
+      shouldSend: (ctx) => {
+        const types = getNotificationTypes(ctx);
+        return types.includes("email");
+      },
+      when: (ctx) => {
+        if (!ctx.executeAt) return "now";
+        const at = new Date(ctx.executeAt);
+        return Number.isNaN(at.getTime()) ? "now" : at;
+      },
+      subject: (ctx) => ctx.title || "Notificación",
+      html: (ctx) => `<p>${ctx.message || ""}</p>`,
+    },
+  ],
+});
+```
+
+The workflow step (`lib/notifications/workflows.ts`) uses `sleep(target)` to pause until the `when` date, then calls `insertNotificationEdge` (for in-app) or `sendSimpleEmailEdge` (for email), and finally marks the execution record as `completed` or `failed`.
+
+## Workflow run ID and cancellation
+
+Every time a Vercel Workflow is started, Sintesis stores its `runId` in `obra_flujo_executions.workflow_run_id`. This allows the system to call `getRun(runId).cancel()` if the action is rescheduled before delivery:
+
+```typescript
+// lib/workflow/cancel.ts
+export async function cancelWorkflowRun(runId: string): Promise<boolean> {
+  try {
+    const run = getRun(runId);
+    await run.cancel();
+    return true;
+  } catch (error) {
+    // Workflow may have already completed or been cancelled
+    console.warn("[workflow/cancel] failed to cancel workflow", { runId });
+    return false;
+  }
+}
+```
+
+<Note>
+Cancellation is best-effort. If the workflow completed between the reschedule request and the cancel call, the cancel will throw and return `false` — the new execution is still created correctly.
+</Note>
+
+## Execution validity check
+
+Before delivering a notification, the workflow calls `checkFlujoExecutionValidEdge` to confirm the execution record still exists with `status = 'pending'`. This prevents duplicate delivery after a reschedule:
+
+```typescript
+// lib/workflow/flujo-executions.ts
+export async function checkFlujoExecutionValidEdge(
+  executionId: string
+): Promise<boolean> {
+  "use step";
+  const response = await workflowFetch(
+    `${supabaseUrl}/rest/v1/obra_flujo_executions?id=eq.${executionId}&status=eq.pending&select=id`,
+    { method: "GET", headers: { ... } }
+  );
+  const data = await response.json();
+  return Array.isArray(data) && data.length > 0;
+}
+```
+
+## Testing workflows
+
+A test endpoint is available in non-production environments (disabled by `WORKFLOW_TEST_DISABLED=1`):
+
+```bash
+POST /api/workflow-test
+Content-Type: application/json
+
+{
+  "variant": "delay",
+  "subject": "Test Subject",
+  "message": "Hello from the test workflow",
+  "recipient": "user@example.com"
+}
+```
+
+| Variant | Behavior |
+|---|---|
+| `immediate` | Sends email with no sleep |
+| `delay` | Sleeps for a configurable duration, then sends |
+
+<Warning>
+The test endpoint is gated by `WORKFLOW_TEST_DISABLED` / `WORKFLOW_TEST_ENABLED` environment variables. Never expose it in production without those guards.
+</Warning>
+
+## Row-level security
+
+All flujo tables are protected by RLS. Users can only read, write, and delete flujo actions for obras that belong to their tenant membership. Executions inherit tenant scope through their parent obra:
+
+```sql
+-- obra_flujo_actions: tenant membership check
+CREATE POLICY "Users can view flujo actions in their tenant"
+  ON obra_flujo_actions FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM memberships
+      WHERE memberships.user_id = auth.uid()
+      AND memberships.tenant_id = obra_flujo_actions.tenant_id
+    )
+  );
+
+-- obra_flujo_executions: join through obras
+CREATE POLICY "Users can view flujo executions in their tenant"
+  ON obra_flujo_executions FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM obras
+      JOIN memberships ON memberships.tenant_id = obras.tenant_id
+      WHERE obras.id = obra_flujo_executions.obra_id
+      AND memberships.user_id = auth.uid()
+    )
+  );
+```
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `WORKFLOWS_DISABLED` | Set to `1` to disable workflow engine (falls back to direct DB insert) |
+| `WORKFLOWS_ENABLED` | Set to `1` to force-enable workflows regardless of other flags |
+| `WORKFLOW_TEST_DISABLED` | Set to `1` to disable the `/api/workflow-test` endpoint |
+| `RESEND_API_KEY` | API key for sending emails via Resend |
+| `RESEND_FROM_EMAIL` | Sender address used by the email workflow steps |
+| `SUPABASE_SERVICE_ROLE_KEY` | Used by workflow steps to call the Supabase REST API directly |

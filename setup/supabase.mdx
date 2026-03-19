@@ -1,0 +1,198 @@
+---
+title: "Supabase setup"
+description: "Create your Supabase project, run migrations, configure storage and Realtime, and connect the CLI to a remote instance."
+---
+
+Sintesis uses Supabase as its backend: Postgres database, Auth, Storage, and Realtime subscriptions. This page covers the full setup from creating a project to pushing migrations to production.
+
+## Creating a Supabase project
+
+<Steps>
+  <Step title="Create an account">
+    Go to [supabase.com](https://supabase.com) and create a free account if you do not have one.
+  </Step>
+  <Step title="Create a new project">
+    From the Supabase dashboard click **New project**. Choose your organisation, give the project a name (e.g. `sintesis-prod`), and select a region close to your users. Set a strong database password and save it somewhere safe — you will need it for direct DB connections.
+  </Step>
+  <Step title="Copy your project credentials">
+    Once the project is provisioned, go to **Project Settings → API** and copy:
+    - **Project URL** → `NEXT_PUBLIC_SUPABASE_URL`
+    - **`anon` public key** → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+    - **`service_role` secret key** → `SUPABASE_SERVICE_ROLE_KEY`
+
+    Paste these into your `.env.local` (or Vercel environment variables for production).
+  </Step>
+</Steps>
+
+## Running migrations
+
+Sintesis maintains a versioned migration history in `supabase/migrations/`. Every file is prefixed with a four-digit sequence number and must be applied in order.
+
+### Apply locally
+
+The local Supabase stack applies all migrations automatically when you run `pnpm supabase:start` (via `supabase db reset` under the hood). To replay migrations against an already-running local stack:
+
+```bash
+pnpm db:reset
+```
+
+<Warning>
+`db:reset` drops and recreates the local database. All local data — including any test users you created — will be lost.
+</Warning>
+
+### Push to a remote project
+
+<Steps>
+  <Step title="Link to your remote project">
+    Replace `<project-ref>` with the reference shown in your Supabase dashboard URL (e.g. `abcdefghijklmnop`).
+
+    ```bash
+    supabase link --project-ref <project-ref>
+    ```
+
+    You will be prompted for the database password you set when creating the project.
+  </Step>
+  <Step title="Push pending migrations">
+    ```bash
+    pnpm db:push:remote
+    ```
+
+    This runs `supabase db push --remote`, which applies any migrations that have not yet been executed on the remote database.
+  </Step>
+</Steps>
+
+### Migration overview
+
+The table below summarises the major migration milestones in sequence:
+
+| Range | What is set up |
+|---|---|
+| `0001` | Base schema: `tenants`, `profiles`, `memberships`, `instruments`, RLS policies, `is_member_of()` helper |
+| `0002–0006` | Dev RLS adjustments, roles & permissions seed, profiles trigger, membership admin reads, onboarding flow |
+| `0007–0010` | Membership self-join, obras table (v1 and v2), obras finish configuration |
+| `0011–0013` | Certificates table, notifications table, materials tables |
+| `0014` | Storage bucket `obra-documents` with RLS policies |
+| `0015–0017` | Material orders doc reference, obra pendientes, certificates extras |
+| `0018` | Realtime publication for `notifications` table |
+| `0019–0024` | Pendientes notifications link, due time, APS models, flujo actions, notification types |
+| `0027` | Superadmin user, `is_superadmin()` helper, automatic superadmin-to-tenant trigger |
+| `0031` | Invitations table |
+| `0038–0039` | RLS policy optimisation, helper function security hardening |
+| `0040–0041` | Calendar events, obra–calendar link |
+| `0044` | Audit log |
+| `0045` | Tenant API secrets |
+| `0048–0054` | Obra tablas, defaults, OCR templates, flujo execution tracking, workflow notifications, macro tables |
+| `0060` | Full permissions system with role templates and macro-table-level permissions |
+| `0062–0070` | Sidebar macro tables, subscription plans, tenant usage enforcement, usage event logs, quick actions |
+| `0071–0086` | Report presets, background jobs, obra reporting, signal logs, custom data, document uploads, audit log refinements |
+
+<Tip>
+To generate a new migration file, run:
+
+```bash
+supabase migration new <migration_name>
+```
+
+This creates a timestamped file in `supabase/migrations/`. Commit it alongside your schema changes.
+</Tip>
+
+## Row Level Security (RLS)
+
+Every table in Sintesis has RLS enabled. The security model is built on three helper functions defined in `0001_base_schema.sql` and progressively hardened in later migrations:
+
+<AccordionGroup>
+  <Accordion title="is_member_of(tenant uuid) → boolean">
+    Returns `true` if the currently authenticated user (`auth.uid()`) has a row in `public.memberships` for the given tenant. Superadmins always return `true` (added in migration `0027`).
+
+    Used on virtually every tenant-scoped table to gate SELECT, INSERT, UPDATE, and DELETE.
+  </Accordion>
+  <Accordion title="is_admin_of(tenant uuid) → boolean">
+    Returns `true` if the user is a superadmin **or** has `role = 'owner'` or `role = 'admin'` in `memberships` for the tenant.
+
+    Used to protect administrative operations such as managing other users, editing roles, and updating tenant settings.
+  </Accordion>
+  <Accordion title="has_permission(tenant uuid, perm_key text) → boolean">
+    Evaluates the full permission chain:
+    1. Superadmin → always `true`.
+    2. `is_admin_of(tenant)` → `true`.
+    3. Direct `user_permission_overrides` grant for `perm_key`.
+    4. Any `user_roles` → `roles` → `role_permissions` → `permissions` path for the tenant.
+
+    Used on feature-level policies (obras, certificates, macro tables, admin sections).
+  </Accordion>
+  <Accordion title="is_superadmin() → boolean">
+    Reads `profiles.is_superadmin` for the current user. Superadmins bypass all tenant scoping and are automatically added as `owner` to every tenant via a database trigger.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+All helper functions are `SECURITY DEFINER` or `STABLE` SQL functions to avoid RLS recursion. Migration `0038` and `0039` contain specific optimisations to prevent stack overflow when policies call each other.
+</Note>
+
+## Storage — obra documents
+
+Migration `0014_storage_obra_documents.sql` creates the `obra-documents` storage bucket and attaches four RLS policies to `storage.objects`:
+
+| Policy | Operation | Condition |
+|---|---|---|
+| `obra-documents read` | `SELECT` | `auth.role() = 'authenticated'` |
+| `obra-documents insert` | `INSERT` | `auth.role() = 'authenticated'` |
+| `obra-documents update` | `UPDATE` | `auth.role() = 'authenticated'` |
+| `obra-documents delete` | `DELETE` | `auth.role() = 'authenticated'` |
+
+The bucket is **private** (`public = false`). Files are served via signed URLs generated on the server.
+
+To create the bucket manually (e.g. if you are using a hosted project without running migrations via CLI):
+
+```sql
+insert into storage.buckets (id, name, public)
+values ('obra-documents', 'obra-documents', false)
+on conflict (id) do nothing;
+```
+
+Then re-apply the policies from `0014_storage_obra_documents.sql` in the Supabase SQL editor.
+
+## Realtime — notifications
+
+Migration `0018_notifications_realtime.sql` adds the `public.notifications` table to the `supabase_realtime` publication:
+
+```sql
+alter publication supabase_realtime add table public.notifications;
+```
+
+This allows the client to subscribe to `INSERT` events on the notifications table using the Supabase Realtime client:
+
+```typescript
+const channel = supabase
+  .channel('notifications')
+  .on(
+    'postgres_changes',
+    { event: 'INSERT', schema: 'public', table: 'notifications' },
+    (payload) => console.log(payload)
+  )
+  .subscribe();
+```
+
+For hosted Supabase projects you can verify Realtime is enabled for a table in **Database → Replication → Source → supabase_realtime**.
+
+## Seed data
+
+`supabase/seed.sql` is executed automatically after `supabase db reset` and after `supabase start` finishes resetting the local database. It inserts:
+
+- A default tenant with ID `00000000-0000-0000-0000-000000000001` and name `Default Tenant`.
+- Three sample instruments (`Guitar`, `Piano`, `Drums`) scoped to the default tenant.
+
+The seed file also contains commented-out snippets you can uncomment to link the current auth user to the default tenant as an `owner`:
+
+```sql
+-- Link your local dev user as owner of the default tenant
+insert into public.memberships (tenant_id, user_id, role)
+values ('00000000-0000-0000-0000-000000000001', auth.uid(), 'owner')
+on conflict (tenant_id, user_id) do nothing;
+```
+
+Run this in the Supabase Studio SQL editor after creating your local user to gain immediate access to all tenant data.
+
+<Warning>
+The seed data is for local development only. Do not run `seed.sql` against a production database.
+</Warning>

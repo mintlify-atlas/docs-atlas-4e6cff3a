@@ -1,0 +1,244 @@
+---
+title: "Local development"
+description: "Set up a full local Sintesis development environment with Next.js, Supabase, and all required tooling."
+---
+
+## Prerequisites
+
+Before you begin, install the following tools:
+
+<Columns cols={2}>
+  <Card title="Node.js 20+" icon="node-js" href="https://nodejs.org">
+    Sintesis targets the Node.js LTS release. Use [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm) to manage versions.
+  </Card>
+  <Card title="pnpm" icon="box" href="https://pnpm.io/installation">
+    The project uses pnpm as its package manager. Install with `npm install -g pnpm`.
+  </Card>
+  <Card title="Docker Desktop" icon="docker" href="https://www.docker.com/products/docker-desktop">
+    The local Supabase stack runs inside Docker containers. Docker Desktop must be running before you start Supabase.
+  </Card>
+  <Card title="Supabase CLI" icon="database" href="https://supabase.com/docs/guides/cli">
+    Manages local migrations and the local Supabase stack. Install with `brew install supabase/tap/supabase` or `npx supabase`.
+  </Card>
+</Columns>
+
+<Note>
+The Supabase CLI is also available as a dev dependency (`supabase@^2.76.8`) in this project. All `pnpm supabase:*` scripts invoke it directly through the local binary, so a global install is optional.
+</Note>
+
+## Step-by-step setup
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/ignacioLiotti/gec.git
+    cd gec
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    pnpm install
+    ```
+  </Step>
+
+  <Step title="Copy environment variables">
+    <Tabs>
+      <Tab title="macOS / Linux">
+        ```bash
+        cp env.example .env.local
+        ```
+      </Tab>
+      <Tab title="Windows PowerShell">
+        ```powershell
+        Copy-Item env.example .env.local
+        ```
+      </Tab>
+    </Tabs>
+
+    The `env.example` file already contains the correct `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` values for the local stack. You do not need to change them for basic development.
+
+    See [Environment variables](/setup/environment) for a full description of every variable.
+  </Step>
+
+  <Step title="Start the local Supabase stack">
+    Make sure Docker Desktop is running, then:
+
+    ```bash
+    pnpm supabase:start
+    ```
+
+    This starts Postgres, the Auth server, Storage, Realtime, and the Supabase Studio UI. On first run it also applies all migrations from `supabase/migrations/` in sequence and seeds the database with `supabase/seed.sql`.
+  </Step>
+
+  <Step title="Verify the stack is running">
+    ```bash
+    pnpm supabase:status
+    ```
+
+    Expected output:
+
+    ```
+    supabase local development setup is running.
+
+         API URL: http://localhost:54321
+          DB URL: postgresql://postgres:postgres@localhost:54322/postgres
+      Studio URL: http://localhost:54323
+    Inbucket URL: http://localhost:54324
+      JWT secret: super-secret-jwt-token-with-at-least-32-characters-long
+        anon key: eyJhbG...
+    service_role key: eyJhbG...
+    ```
+  </Step>
+
+  <Step title="Start the Next.js development server">
+    ```bash
+    pnpm dev
+    ```
+
+    Open [http://localhost:3000](http://localhost:3000) to see the application. The server uses Turbopack and hot-reloads on file changes.
+  </Step>
+</Steps>
+
+## Default local ports
+
+| Service | Port | URL |
+|---|---|---|
+| Next.js app | `3000` | `http://localhost:3000` |
+| Supabase API (REST) | `54321` | `http://localhost:54321` |
+| Postgres database | `54322` | `postgresql://postgres:postgres@localhost:54322/postgres` |
+| Supabase Studio | `54323` | `http://localhost:54323` |
+| Inbucket (email testing) | `54324` | `http://localhost:54324` |
+
+## Managing the local stack
+
+```bash
+# Stop the Supabase stack (preserves data)
+pnpm supabase:stop
+
+# Reset the database (drops everything, re-runs migrations + seed)
+pnpm db:reset
+
+# Push pending migrations to remote Supabase
+pnpm db:push:remote
+```
+
+## Creating a local admin user
+
+After the stack is running you need a user account to sign in to the app.
+
+<Steps>
+  <Step title="Create a user in Supabase Studio">
+    Open [http://localhost:54323](http://localhost:54323) and go to **Authentication → Users → Add user**. Enter an email and password.
+
+    Alternatively, sign up through the app at `http://localhost:3000/auth/sign-up`.
+  </Step>
+
+  <Step title="Assign the user to the default tenant">
+    Open the Supabase Studio **SQL editor** and run:
+
+    ```sql
+    insert into public.memberships (tenant_id, user_id, role)
+    values (
+      '00000000-0000-0000-0000-000000000001',
+      (select id from auth.users where email = 'you@example.com'),
+      'owner'
+    )
+    on conflict (tenant_id, user_id) do nothing;
+    ```
+
+    Replace `you@example.com` with the email you registered.
+  </Step>
+
+  <Step title="Grant superadmin access (optional)">
+    To grant a user superadmin access — which bypasses all RLS checks and gives ownership over every tenant — run:
+
+    ```sql
+    update public.profiles
+    set is_superadmin = true
+    where user_id = (select id from auth.users where email = 'you@example.com');
+    ```
+
+    <Warning>
+    Superadmin users bypass all Row Level Security policies. Only grant this to trusted developers on local environments.
+    </Warning>
+  </Step>
+</Steps>
+
+## Running tests
+
+### Unit and integration tests
+
+Sintesis uses [Vitest](https://vitest.dev) for unit and integration tests.
+
+```bash
+# Run all tests once
+pnpm test
+
+# Watch mode — re-runs tests on file changes
+pnpm test:watch
+```
+
+### End-to-end tests
+
+End-to-end tests use [Playwright](https://playwright.dev).
+
+```bash
+# Run all e2e tests headlessly
+pnpm test:e2e
+
+# Open the Playwright UI for interactive debugging
+pnpm test:e2e:ui
+```
+
+<Note>
+Playwright tests expect the Next.js dev server and local Supabase stack to already be running on their default ports before you execute `pnpm test:e2e`.
+</Note>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Docker is not running">
+    `pnpm supabase:start` will fail with an error like `Cannot connect to the Docker daemon`. Open Docker Desktop and wait for it to finish starting before retrying.
+  </Accordion>
+
+  <Accordion title="Port already in use">
+    If port `54321`, `54322`, or `3000` is already occupied, stop whatever is using it or customise the ports in `supabase/config.toml` (for Supabase) or set `PORT` in your environment (for Next.js).
+
+    To find what is using a port:
+
+    ```bash
+    # macOS / Linux
+    lsof -i :54321
+
+    # Windows
+    netstat -ano | findstr :54321
+    ```
+  </Accordion>
+
+  <Accordion title="Migrations fail during supabase:start">
+    If a migration throws an error, the stack will stop. Check the output for the failing migration file name. You can inspect the migration SQL in `supabase/migrations/` and apply a fix, then run `pnpm db:reset` to replay from scratch.
+  </Accordion>
+
+  <Accordion title="Can't sign in — email not confirmed">
+    By default the local Supabase Auth instance does not require email confirmation. If you see a confirmation prompt, go to **Supabase Studio → Authentication → Users**, find the user, and click **Send magic link** or manually set the `email_confirmed_at` column:
+
+    ```sql
+    update auth.users
+    set email_confirmed_at = now()
+    where email = 'you@example.com';
+    ```
+  </Accordion>
+
+  <Accordion title="RLS errors — data not visible after sign-in">
+    If you sign in but see no data, your user likely has no membership row for any tenant. Run the SQL from [Creating a local admin user](#creating-a-local-admin-user) to add them to the default tenant.
+  </Accordion>
+
+  <Accordion title="supabase:start is very slow on first run">
+    The first run pulls several Docker images (Postgres, Kong, GoTrue, etc.). This can take several minutes on a slow connection. Subsequent starts are much faster because images are cached locally.
+  </Accordion>
+
+  <Accordion title="Next.js build errors mentioning Sentry">
+    Sentry source map upload is only active on Vercel production builds (`VERCEL=1` and `VERCEL_ENV=production`). Local builds skip the Sentry webpack plugin entirely. If you see Sentry-related errors locally, ensure `SENTRY_DSN` is either empty or unset in `.env.local`.
+  </Accordion>
+</AccordionGroup>

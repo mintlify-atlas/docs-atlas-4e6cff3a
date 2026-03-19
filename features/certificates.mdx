@@ -1,0 +1,146 @@
+---
+title: "Certificates"
+description: "Track payment certificates (certificados) per obra in Sintesis — create, manage, and monitor billing and payment status for each certification period."
+---
+
+In Argentine construction practice, a **certificado** (payment certificate) is the formal document that records what work has been measured, valued, and approved for payment in a given period. Sintesis stores certificates against each obra and tracks their full billing and payment lifecycle.
+
+## Certificates overview
+
+Each obra can have multiple certificates. Certificates are managed from the obra detail view and also via the dedicated **Certificados** global view that aggregates certificates across all obras for your tenant.
+
+<CardGroup cols={2}>
+  <Card title="Per-obra certificates" icon="building">
+    View and manage certificates for a single obra from the **Certificados** tab at `/excel/[obraId]?tab=certificates`.
+  </Card>
+  <Card title="Global certificates view" icon="list">
+    See all certificates across every obra from the **Gestión de certificados** screen at `/certificados`, with tabs, search, and pagination.
+  </Card>
+  <Card title="Billing tracking" icon="file-invoice">
+    Record invoice number, invoice date, and concept for each certificate once it has been billed (`facturado`).
+  </Card>
+  <Card title="Payment tracking" icon="circle-check">
+    Mark certificates as collected (`cobrado`), record the payment date, and add observations. Track due dates and alert on overdue payments.
+  </Card>
+</CardGroup>
+
+## Certificate schema
+
+Certificates are stored in the `public.certificates` table, which inherits tenant scoping through the parent obra.
+
+### Core fields
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key, auto-generated. |
+| `obra_id` | `uuid` | The obra this certificate belongs to. |
+| `n_exp` | `text` | Expediente (file/docket) number. |
+| `n_certificado` | `integer` | Certificate sequence number within the obra. |
+| `monto` | `numeric` | Certified amount (ARS). |
+| `mes` | `text` | Certification period (month). |
+| `estado` | `text` | Certificate status. Default: `CERTIFICADO`. |
+| `created_at` | `timestamptz` | Record creation timestamp. |
+| `updated_at` | `timestamptz` | Last update timestamp (auto-updated by trigger). |
+
+### Billing and payment fields
+
+These fields were added in migration `0017` to support the full invoicing lifecycle:
+
+| Column | Type | Description |
+|---|---|---|
+| `facturado` | `boolean` | Whether the certificate has been invoiced. Default: `false`. |
+| `fecha_facturacion` | `date` | Invoice date. |
+| `nro_factura` | `text` | Invoice number. |
+| `concepto` | `text` | Description / concept on the invoice. |
+| `cobrado` | `boolean` | Whether payment has been received. Default: `false`. |
+| `vencimiento` | `date` | Payment due date. |
+| `fecha_pago` | `date` | Actual payment date. |
+| `observaciones` | `text` | Free-text notes about the certificate. |
+
+## Creating a certificate
+
+<Steps>
+  <Step title="Open the obra">
+    Navigate to **Panel de obras** and click the obra you want to add a certificate to.
+  </Step>
+  <Step title="Go to the Certificados tab">
+    In the obra detail view, click the **Certificados** tab. Existing certificates are shown in the table.
+  </Step>
+  <Step title="Add a new certificate">
+    Click the **+ Agregar certificado** button. A form appears with the following required fields:
+    - **N° de expediente** (`n_exp`)
+    - **N° de certificado** (`n_certificado`)
+    - **Monto** (`monto`)
+    - **Mes** (`mes`)
+    - **Estado** (`estado`) — defaults to `CERTIFICADO`
+  </Step>
+  <Step title="Save">
+    Submit the form. The certificate is created immediately and added to the table.
+  </Step>
+</Steps>
+
+## Managing billing and payment
+
+Once a certificate exists, you can update its billing and payment status inline:
+
+<Tabs>
+  <Tab title="Mark as billed">
+    1. Click the certificate row to enter edit mode.
+    2. Toggle **Facturado** to `Sí`.
+    3. Fill in **Fecha de facturación**, **N° de factura**, and **Concepto**.
+    4. Save the row.
+  </Tab>
+  <Tab title="Mark as paid">
+    1. Click the certificate row to enter edit mode.
+    2. Toggle **Cobrado** to `Sí`.
+    3. Fill in **Fecha de pago**.
+    4. Optionally add **Observaciones**.
+    5. Save the row.
+  </Tab>
+  <Tab title="Set due date">
+    1. Click the certificate row.
+    2. Set **Vencimiento** to the expected payment date.
+    3. Save. Sintesis uses this date in reporting rules to flag overdue certificates.
+  </Tab>
+</Tabs>
+
+## Global certificates view
+
+The **Gestión de certificados** page (`/certificados`) shows all certificates across your tenant's obras in a single paginated table powered by `FormTable`. Features include:
+
+- Tab filters to segment by status (e.g., pending billing, unpaid, overdue)
+- Toolbar with search and column controls
+- Pagination for large datasets
+
+## Row-level security
+
+Certificates inherit access control from their parent obra. A user can only read or write certificates for obras in their tenant:
+
+```sql
+CREATE POLICY "Users can view certificates from their tenant's obras"
+  ON public.certificates FOR SELECT
+  USING (
+    obra_id IN (
+      SELECT id FROM public.obras
+      WHERE tenant_id IN (
+        SELECT tenant_id FROM public.memberships
+        WHERE user_id = auth.uid()
+      )
+    )
+  );
+```
+
+## Performance indexes
+
+The following indexes are maintained to keep certificate queries fast even with large datasets:
+
+| Index | Column(s) | Purpose |
+|---|---|---|
+| `certificates_obra_id_idx` | `obra_id` | Fast lookup of certificates per obra |
+| `certificates_facturado_idx` | `facturado` | Filter unbilled certificates |
+| `certificates_cobrado_idx` | `cobrado` | Filter unpaid certificates |
+| `certificates_vencimiento_idx` | `vencimiento` | Find overdue certificates by due date |
+
+<Tip>
+  The reporting engine uses `vencimiento` and `cobrado` to generate **Unpaid Certificates** findings. Make sure to set `vencimiento` when creating certificates so the rule can fire correctly.
+</Tip>

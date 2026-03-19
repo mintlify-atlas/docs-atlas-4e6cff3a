@@ -1,0 +1,125 @@
+---
+title: "Documents"
+description: "Per-obra document storage in Sintesis — upload, organise, and retrieve files for each construction project using the obra-documents storage bucket."
+---
+
+Each obra in Sintesis has its own document repository. Files are stored in Supabase Storage in the private `obra-documents` bucket and are accessible only to authenticated members of the obra's tenant.
+
+## Document storage overview
+
+Documents are organised in a virtual folder hierarchy under each obra. The platform tracks every upload in the `obra_document_uploads` table, recording who uploaded a file, when, and under which storage path. This gives you a full audit trail per obra.
+
+<CardGroup cols={2}>
+  <Card title="Private bucket" icon="lock">
+    The `obra-documents` bucket is non-public. All read and write operations require an authenticated Supabase session belonging to the obra's tenant.
+  </Card>
+  <Card title="Upload audit log" icon="clock-rotate-left">
+    Every uploaded file is recorded in `obra_document_uploads` with uploader identity and timestamp, giving you a chronological history of documents added to each obra.
+  </Card>
+  <Card title="Folder structure" icon="folder-open">
+    Documents are grouped into logical folders per obra (certificates, general documentation, materials, etc.). Folders can be OCR-enabled, manual-input, or both.
+  </Card>
+  <Card title="Supported formats" icon="file">
+    PDFs, Excel workbooks, Word documents, and image files can be stored. OCR extraction is available for PDF and image documents in enabled folders.
+  </Card>
+</CardGroup>
+
+## Accessing documents
+
+Documents for a specific obra are accessed from the obra detail view:
+
+<Steps>
+  <Step title="Open an obra">
+    From **Panel de obras**, click on any obra row to open its detail page at `/excel/[obraId]`.
+  </Step>
+  <Step title="Go to the Documents tab">
+    Click the **Documentos** tab in the obra detail view. The documents tab loads lazily to keep the initial page fast.
+  </Step>
+  <Step title="Browse folders">
+    The documents tab displays the folder hierarchy for this obra. Each folder shows its name, the number of files it contains, and the input method (OCR, manual, or both).
+  </Step>
+</Steps>
+
+## Folder types
+
+Folders for each obra are defined by your admin under **Obra Defaults** and can be extended with tablas-linked folders. Common default folder categories include:
+
+| Folder | Purpose |
+|---|---|
+| Certificados | Payment certificate documents (PDFs of certified amounts by period) |
+| Certificados Extraídos | OCR-extracted certificate summaries used to auto-populate `certificado_a_la_fecha` |
+| Documentación | General project documentation |
+| Materiales | Material order forms and supplier documents |
+| Planos | Architectural and engineering drawings |
+| Pólizas | Insurance policy documents |
+
+<Note>
+  Folders linked to OCR-enabled tablas appear automatically in the documents tab for any obra that has those tablas configured. The `dataInputMethod` setting on each folder controls whether users see an OCR upload button, a manual entry form, or both.
+</Note>
+
+## Uploading documents
+
+<Steps>
+  <Step title="Navigate to a folder">
+    Inside the **Documentos** tab, click on the folder where you want to add a file.
+  </Step>
+  <Step title="Upload a file">
+    Use the file picker to select a file from your device. Drag-and-drop is also supported where your browser allows it. Accepted types include:
+    - PDF (`.pdf`)
+    - Excel (`.xlsx`, `.xls`)
+    - Word (`.docx`, `.doc`)
+    - Images (`.png`, `.jpg`, `.jpeg`)
+  </Step>
+  <Step title="Confirm the upload">
+    Sintesis uploads the file to the `obra-documents` Supabase Storage bucket and creates a record in `obra_document_uploads`. The upload appears in the folder immediately after completion.
+  </Step>
+</Steps>
+
+## Document upload schema
+
+The `obra_document_uploads` table tracks every file upload:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key, auto-generated. |
+| `obra_id` | `uuid` | The obra this document belongs to. |
+| `storage_bucket` | `text` | Always `obra-documents`. |
+| `storage_path` | `text` | Full path within the bucket (unique). |
+| `file_name` | `text` | Original file name as uploaded. |
+| `uploaded_by` | `uuid` | The `auth.users.id` of the uploader. |
+| `uploaded_at` | `timestamptz` | Timestamp of the upload. |
+| `created_at` | `timestamptz` | Record creation timestamp. |
+
+## Storage bucket policies
+
+The `obra-documents` bucket enforces authenticated-only access at the storage layer:
+
+```sql
+-- Read policy
+CREATE POLICY "obra-documents read"
+  ON storage.objects FOR SELECT
+  USING (
+    bucket_id = 'obra-documents'
+    AND auth.role() = 'authenticated'
+  );
+```
+
+Upload access is further restricted at the `obra_document_uploads` table level — a user can only insert a record if:
+1. `uploaded_by` equals their own `auth.uid()`.
+2. The referenced obra belongs to a tenant they are a member of.
+
+<Warning>
+  Deleting a document from storage does not automatically remove the corresponding `obra_document_uploads` row. Handle deletion through the application UI to keep the audit log consistent.
+</Warning>
+
+## OCR-linked folders
+
+Folders that have OCR enabled allow Sintesis to extract structured data from uploaded PDFs and images into a linked tabla. When a file is uploaded to an OCR folder:
+
+1. Sintesis processes the file and extracts tabular data.
+2. The extracted rows are stored in the associated `obra_tabla`.
+3. If the folder is the **Certificados Extraídos** folder, the extracted `monto_acumulado` is used to auto-suggest the `certificado_a_la_fecha` field on the obra's general tab.
+
+<Tip>
+  You can check which folders have OCR enabled by looking at the folder card — OCR folders display a scanner icon and an "OCR" badge.
+</Tip>

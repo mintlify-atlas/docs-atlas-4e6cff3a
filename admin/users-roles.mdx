@@ -1,0 +1,248 @@
+---
+title: "Users & roles"
+description: "Managing users, invitations, roles, and permissions within a Sintesis tenant."
+---
+
+Sintesis has a two-layer access control system. The first layer is the **membership role** (`owner`, `admin`, `member`) attached to every user–tenant relationship. The second layer is a **fine-grained permissions system** built on top of database-level roles and permission keys. This page covers both layers, plus the invitation flow for adding new users.
+
+## Membership roles
+
+Every user who belongs to a tenant has exactly one membership role for that tenant, stored in the `memberships` table.
+
+```sql
+CREATE TYPE public.membership_role AS ENUM ('owner', 'admin', 'member');
+
+CREATE TABLE public.memberships (
+  tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  user_id   uuid NOT NULL REFERENCES auth.users(id)  ON DELETE CASCADE,
+  role      public.membership_role NOT NULL DEFAULT 'member',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, user_id)
+);
+```
+
+| Role | Description |
+|---|---|
+| `owner` | The user who created the tenant. Has full access to all features and settings. Exactly one owner per tenant bootstrapped at creation. |
+| `admin` | Trusted users who can manage other users, roles, invitations, and tenant configuration. Identical privilege level to `owner` for most RLS checks. |
+| `member` | Default role for invited users. Access is governed by the fine-grained permissions system described below. |
+
+The database helper `is_admin_of(tenant)` returns `true` when the current user has `owner` or `admin` role in that tenant, and is used throughout RLS policies and the `has_permission` function.
+
+## User management panel
+
+Navigate to **Admin → Users** to manage members of the active tenant. The page requires the `admin:roles` permission (automatically satisfied by `owner` and `admin` members).
+
+The user table shows:
+
+| Column | Description |
+|---|---|
+| User | Full name and email from `auth.users` metadata |
+| Org role | Membership role (`owner`, `admin`, `member`) |
+| Assigned roles | Custom roles from the `user_roles` table |
+| Overrides | Per-user permission modifications |
+
+### Inviting users
+
+Click **Invite user** to open the invitation dialog. Provide the recipient's email address and choose their initial membership role (`member` or `admin`). The system creates an invitation record and sends an email with a unique acceptance link.
+
+<Note>
+Only one pending invitation per email per tenant is allowed at a time. Attempting to invite an email that already has a pending invitation returns an error.
+</Note>
+
+## Invitation system
+
+Invitations are stored in the `invitations` table:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `tenant_id` | `uuid` | The tenant being invited into |
+| `email` | `text` | Recipient email (normalized to lowercase) |
+| `invited_by` | `uuid` | User ID of the admin who sent the invite |
+| `invited_role` | `text` | Role to assign on acceptance (`member` or `admin`) |
+| `status` | `text` | `pending`, `accepted`, `declined`, `expired`, or `cancelled` |
+| `token` | `text` | Unique hex token used in the acceptance URL |
+| `expires_at` | `timestamptz` | Auto-set to 72 hours after creation |
+| `accepted_at` | `timestamptz` | When the invite was accepted (nullable) |
+| `accepted_by` | `uuid` | User ID who accepted (nullable) |
+
+### Invitation lifecycle
+
+<Steps>
+  <Step title="Admin sends invitation">
+    An admin calls `sendInvitation({ tenantId, email, role })`. The server action verifies the caller has `is_admin_of(tenantId)`, creates the `invitations` row, and sends an email containing the link `{APP_URL}/invitations/{token}`.
+  </Step>
+  <Step title="Recipient receives email">
+    The recipient opens the link. The page loads invitation details via the `get_invitation_by_token(token)` RPC function, which returns results only for `pending` invitations that have not yet expired.
+  </Step>
+  <Step title="Recipient accepts or declines">
+    - **Accept**: The server action verifies the recipient's email matches the invitation, creates a `memberships` row with the invited role, and marks the invitation as `accepted`.
+    - **Decline**: The invitation status is updated to `declined`. No membership is created.
+
+    If the user is not logged in when they open the link, they are redirected to the login page with a `returnTo` parameter so they land back on the invitation after authentication.
+  </Step>
+  <Step title="Invitation expires automatically">
+    The `expire_old_invitations()` Postgres function sets `status = 'expired'` on all pending invitations where `expires_at <= now()`. This function is called at the start of every list query to keep the table tidy.
+  </Step>
+</Steps>
+
+<Warning>
+The invitation is email-locked. If the recipient's logged-in email does not match `invitations.email`, the accept action returns an error. Users must log in with the exact email to which the invitation was sent.
+</Warning>
+
+### Managing pending invitations
+
+Admins can view all pending invitations for a tenant in the **Users** panel under the pending invitations list. Each row shows the recipient email, the invited role, and the expiry time. Admins can cancel any pending invitation; cancelled invitations cannot be reactivated — a new invitation must be sent.
+
+## Fine-grained permissions
+
+Beyond the three membership roles, Sintesis provides a database-driven permissions system that lets admins grant granular access to `member`-level users.
+
+### Core tables
+
+| Table | Description |
+|---|---|
+| `permissions` | Global registry of permission keys with category, display name, and sort order |
+| `roles` | Tenant-scoped custom role definitions (name, description, color, `is_default` flag) |
+| `role_permissions` | Many-to-many join: which permissions a role grants |
+| `user_roles` | Assignment of roles to users within a tenant |
+| `user_permission_overrides` | Per-user overrides: explicitly grant or deny a specific permission key |
+
+### Permission keys
+
+Permissions are grouped into categories. The full seeded list is:
+
+<AccordionGroup>
+  <Accordion title="Navigation permissions">
+
+  | Key | Display name | Description |
+  |---|---|---|
+  | `nav:dashboard` | Dashboard | Access to Dashboard |
+  | `nav:excel` | Excel/Obras | Access to the obras listing |
+  | `nav:certificados` | Certificados | Access to the certificates section |
+  | `nav:macro` | Macro Tablas | Access to macro tables section |
+  | `nav:notifications` | Notificaciones | Access to notifications |
+  | `nav:admin` | Administracion | Access to the admin section |
+
+  </Accordion>
+  <Accordion title="Obras permissions">
+
+  | Key | Display name | Description |
+  |---|---|---|
+  | `obras:read` | Ver Obras | View obras and their data |
+  | `obras:edit` | Editar Obras | Edit obra data and tables |
+  | `obras:admin` | Administrar Obras | Full obra management including delete |
+
+  </Accordion>
+  <Accordion title="Certificates permissions">
+
+  | Key | Display name | Description |
+  |---|---|---|
+  | `certificados:read` | Ver Certificados | View certificates |
+  | `certificados:edit` | Editar Certificados | Create and edit certificates |
+  | `certificados:admin` | Administrar Certificados | Full certificate management |
+
+  </Accordion>
+  <Accordion title="Macro table permissions">
+
+  | Key | Display name | Description |
+  |---|---|---|
+  | `macro:read` | Ver Macro Tablas | View macro tables (global access) |
+  | `macro:edit` | Editar Macro Tablas | Edit macro table data (global access) |
+  | `macro:admin` | Administrar Macro Tablas | Configure and manage macro tables |
+
+  </Accordion>
+  <Accordion title="Admin permissions">
+
+  | Key | Display name | Description |
+  |---|---|---|
+  | `admin:users` | Gestionar Usuarios | Manage tenant users |
+  | `admin:roles` | Gestionar Roles | Manage roles and permissions |
+  | `admin:audit` | Ver Auditoria | View audit logs |
+  | `admin:settings` | Configuracion | Manage tenant settings |
+
+  </Accordion>
+</AccordionGroup>
+
+### How `has_permission` works
+
+The `has_permission(tenant, perm_key)` function is called at the application layer to authorize actions. It returns `true` if any of the following are true:
+
+1. The calling user is a super-admin (`is_superadmin()`)
+2. The calling user is an `owner` or `admin` of the tenant (`is_admin_of(tenant)`)
+3. The user has a `user_permission_overrides` row granting the permission
+4. The user has a `user_roles` assignment to a role that has the permission via `role_permissions`
+
+```sql
+-- Simplified view of has_permission logic
+SELECT
+  public.is_superadmin()
+  OR public.is_admin_of(tenant)
+  OR EXISTS (SELECT 1 FROM user_permission_overrides WHERE user_id = auth.uid() AND is_granted = true AND perm_key = ...)
+  OR EXISTS (SELECT 1 FROM user_roles ur JOIN role_permissions rp ON ... WHERE r.tenant_id = tenant AND perm_key = ...)
+```
+
+### Macro table permissions
+
+In addition to global permission keys, individual macro tables have their own permission entries in `macro_table_permissions`. A user or role can be assigned `read`, `edit`, or `admin` access to a specific macro table. These are checked by `has_macro_table_permission(macro_table_id, required_level)` using the same hierarchy (`admin > edit > read`).
+
+### Role templates
+
+Admins can create roles from pre-built system templates rather than assigning permissions manually:
+
+| Template key | Name | Included permissions |
+|---|---|---|
+| `viewer` | Viewer | All `nav:*` and `*:read` permissions |
+| `editor` | Editor | Viewer permissions plus `obras:edit`, `certificados:edit`, `macro:edit` |
+| `obra_manager` | Obra Manager | Navigation + full obras access + certificate read |
+| `accountant` | Accountant | Navigation + obra read + full certificate access |
+| `macro_analyst` | Macro Analyst | Dashboard + full macro table access |
+
+## Route access control
+
+Route-level protection is configured in `lib/route-access.ts`. The file exports `ROUTE_ACCESS_CONFIG`, an array of path patterns and their required membership roles.
+
+```typescript
+export const ROUTE_ACCESS_CONFIG: RouteAccessConfig[] = [
+  // All authenticated users
+  { path: "/certificados",    allowedRoles: [] },
+  { path: "/excel",           allowedRoles: [] },
+  { path: "/macro",           allowedRoles: [] },
+  { path: "/notifications",   allowedRoles: [] },
+
+  // Admin/owner only
+  { path: "/admin",                allowedRoles: ["admin"] },
+  { path: "/admin/audit-log",      allowedRoles: ["admin"] },
+  { path: "/admin/tenants",        allowedRoles: ["admin"] },
+  { path: "/admin/users",          allowedRoles: ["admin"] },
+  { path: "/admin/roles",          allowedRoles: ["admin"] },
+  { path: "/admin/tenant-secrets", allowedRoles: ["admin"] },
+  // ... and more
+];
+```
+
+**Rules:**
+- Routes not listed in the config are accessible by all authenticated users.
+- Routes listed with `allowedRoles: []` are accessible by all authenticated users.
+- Routes listed with `allowedRoles: ["admin"]` require the user's membership role to be `admin` or `owner`.
+- The `"admin"` role entry is checked against the membership role, not the custom roles system.
+
+The sidebar also uses this configuration to filter out navigation items the current user cannot access.
+
+## Impersonation
+
+Super-admins can impersonate a tenant-level user to debug issues as that user would experience them. When impersonation is active, a yellow banner appears at the top of the **Admin → Users** page.
+
+The banner component checks for an `impersonating` cookie:
+
+```typescript
+// app/admin/users/_components/impersonate-banner.tsx
+const active = document.cookie.includes('impersonating=');
+```
+
+To stop impersonating, click **"Volver a mi cuenta"** in the banner. This calls `POST /api/impersonate/stop`, which clears the impersonation cookie and restores the super-admin session.
+
+<Warning>
+Impersonation is a super-admin-only feature. It is not available to regular `owner` or `admin` users. All actions taken during impersonation are attributed to the impersonated user in the audit log.
+</Warning>

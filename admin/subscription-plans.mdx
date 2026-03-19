@@ -1,0 +1,201 @@
+---
+title: "Subscription plans"
+description: "Plan tiers, usage limits, per-tenant overrides, and enforcement in Sintesis."
+---
+
+Sintesis tracks resource consumption per tenant and can enforce configurable limits on storage, AI tokens, and WhatsApp messages. Plans are defined globally in `subscription_plans` and linked to tenants through `tenant_subscriptions`. Per-tenant overrides let super-admins customize limits without changing the global plan definition.
+
+## Plan tiers
+
+Two system plans ship with the platform:
+
+| Plan key | Name | Description |
+|---|---|---|
+| `starter` | Starter | Base plan for teams in pilot programs |
+| `growth` | Growth | Recommended for active organizations |
+
+Plans are defined in the `subscription_plans` table:
+
+```sql
+CREATE TABLE public.subscription_plans (
+  plan_key                  text    PRIMARY KEY,
+  name                      text    NOT NULL,
+  description               text,
+  storage_limit_bytes       bigint,   -- NULL = unlimited
+  ai_token_budget           bigint,   -- NULL = unlimited
+  whatsapp_message_budget   bigint,   -- NULL = unlimited
+  metadata                  jsonb   DEFAULT '{}'::jsonb,
+  created_at                timestamptz NOT NULL DEFAULT now()
+);
+```
+
+<Note>
+As of migration `0068`, the limit columns on both seeded plans are set to `NULL`, meaning **no hard limits are currently enforced** at the plan tier level. Limits are only active when explicitly set through per-tenant overrides. This state was intentional while billing tiers are being wired up.
+</Note>
+
+## Tenant subscriptions
+
+Each tenant has exactly one row in `tenant_subscriptions` linking it to a plan:
+
+| Column | Type | Description |
+|---|---|---|
+| `tenant_id` | `uuid` | Primary key, references `tenants` |
+| `plan_key` | `text` | Active plan key |
+| `status` | `text` | Subscription status (default `active`) |
+| `current_period_start` | `timestamptz` | Start of the current billing period |
+| `current_period_end` | `timestamptz` | End of the current billing period (nullable) |
+| `external_customer_id` | `text` | External billing provider customer ID (nullable) |
+| `external_subscription_id` | `text` | External billing provider subscription ID (nullable) |
+| `storage_limit_bytes_override` | `bigint` | Per-tenant storage cap override (nullable) |
+| `ai_token_budget_override` | `bigint` | Per-tenant AI token cap override (nullable) |
+| `whatsapp_message_budget_override` | `bigint` | Per-tenant WhatsApp message cap override (nullable) |
+
+When a new tenant is created, a row is automatically inserted into `tenant_subscriptions` with `plan_key = 'starter'`.
+
+## Resolving effective limits
+
+The `fetchTenantPlan` function in `lib/subscription-plans.ts` computes the effective limits for a tenant by combining plan-level values with per-tenant overrides. Override columns take precedence:
+
+```typescript
+// lib/subscription-plans.ts
+function mapPlan(row: SubscriptionRow | null): SubscriptionPlan {
+  const plan = row?.subscription_plans;
+  const overrideStorage   = normalizeLimit(row?.storage_limit_bytes_override);
+  const overrideTokens    = normalizeLimit(row?.ai_token_budget_override);
+  const overrideWhatsapp  = normalizeLimit(row?.whatsapp_message_budget_override);
+  return {
+    key: plan?.plan_key ?? DEFAULT_PLAN_KEY,
+    limits: {
+      storageBytes:      overrideStorage  ?? normalizeLimit(plan?.storage_limit_bytes),
+      aiTokens:          overrideTokens   ?? normalizeLimit(plan?.ai_token_budget),
+      whatsappMessages:  overrideWhatsapp ?? normalizeLimit(plan?.whatsapp_message_budget),
+    },
+  };
+}
+```
+
+A `null` value for any limit field means **unlimited**. When `fetchTenantPlan` cannot find a subscription row for the tenant, it falls back to the global `starter` plan definition.
+
+## Usage tracking
+
+Usage is tracked at monthly billing-period granularity in the `tenant_api_expenses` table. The current period is the calendar month in UTC.
+
+### Reading usage
+
+Call `fetchTenantUsage(supabase, tenantId)` to get the current period's snapshot:
+
+```typescript
+// lib/tenant-usage.ts
+export type TenantUsageSnapshot = {
+  periodStart:      string;  // YYYY-MM-DD
+  periodEnd:        string;  // YYYY-MM-DD
+  storageBytes:     number;
+  aiTokens:         number;
+  whatsappMessages: number;
+};
+```
+
+The function queries `tenant_api_expenses` filtered by `tenant_id` and the current period start/end dates. If no row exists yet (the tenant has had zero usage this period), it returns a zeroed snapshot.
+
+### Recording usage
+
+Usage deltas are written atomically using the `increment_tenant_api_usage` Postgres function, which upserts the monthly row and checks limits in the same transaction:
+
+```sql
+SELECT public.increment_tenant_api_usage(
+  p_tenant            => $tenant_id,
+  p_storage_delta     => 1048576,   -- +1 MB
+  p_ai_tokens_delta   => 500,
+  p_whatsapp_delta    => 0,
+  p_storage_limit     => 5368709120, -- 5 GB cap
+  p_ai_token_limit    => 1000000,
+  p_whatsapp_limit    => null
+);
+```
+
+The application calls this via `incrementTenantUsage(supabase, tenantId, delta, limits)` in `lib/tenant-usage.ts`. The `limits` argument is obtained from `fetchTenantPlan` so that per-tenant overrides are always respected.
+
+### Usage event log
+
+Every increment is also written to `tenant_usage_events` as an immutable event record:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `tenant_id` | `uuid` | Owning tenant |
+| `kind` | `text` | `storage_bytes`, `ai_tokens`, or `whatsapp_messages` |
+| `amount` | `bigint` | Delta amount (positive or negative) |
+| `context` | `text` | Optional human-readable label (e.g., filename or action) |
+| `metadata` | `jsonb` | Arbitrary structured data |
+| `created_at` | `timestamptz` | Event timestamp |
+
+```typescript
+await logTenantUsageEvent(supabase, {
+  tenantId,
+  kind: 'storage_bytes',
+  amount: fileSize,
+  context: 'document upload: contrato.pdf',
+});
+```
+
+## Per-tenant overrides
+
+Super-admins can set custom limits for a specific tenant by updating the override columns on `tenant_subscriptions`. Overrides apply on top of (and take precedence over) the plan-level values.
+
+```sql
+-- Give a tenant a 10 GB storage cap regardless of plan
+UPDATE public.tenant_subscriptions
+SET storage_limit_bytes_override = 10737418240
+WHERE tenant_id = '<tenant-id>';
+
+-- Remove the override (revert to plan-level limit)
+UPDATE public.tenant_subscriptions
+SET storage_limit_bytes_override = NULL
+WHERE tenant_id = '<tenant-id>';
+```
+
+<Tip>
+Set an override to `NULL` to remove it. The effective limit then falls back to the plan-level value, which is also `NULL` (unlimited) for the current seeded plans.
+</Tip>
+
+## What happens when a limit is exceeded
+
+When a limit is non-null and the new cumulative value would exceed it, `increment_tenant_api_usage` raises a Postgres exception before committing the update:
+
+| Exception code | Description |
+|---|---|
+| `storage_limit_exceeded` | Storage bytes would exceed `p_storage_limit` |
+| `ai_limit_exceeded` | AI tokens used would exceed `p_ai_token_limit` |
+| `whatsapp_limit_exceeded` | WhatsApp messages would exceed `p_whatsapp_limit` |
+
+In `lib/tenant-usage.ts`, these exceptions are caught and re-thrown as JavaScript `Error` objects with the Postgres exception code attached as `error.code`. Calling code should catch these errors and surface an appropriate message to the user.
+
+```typescript
+try {
+  await incrementTenantUsage(supabase, tenantId, delta, limits);
+} catch (err: any) {
+  if (err.code === 'storage_limit_exceeded') {
+    // Show storage upgrade prompt
+  }
+}
+```
+
+## Monitoring usage in the admin panel
+
+The admin expenses section (`/admin/expenses` and `/admin/expenses/all`) provides a view of usage and costs per tenant. Both routes are restricted to users with `allowedRoles: ["admin"]` in the route access configuration.
+
+<CardGroup cols={2}>
+  <Card title="Current tenant" icon="chart-bar">
+    `/admin/expenses` shows the active tenant's current period usage summary.
+  </Card>
+  <Card title="All tenants" icon="table">
+    `/admin/expenses/all` is a super-admin view listing usage across every tenant for comparison and billing review.
+  </Card>
+</CardGroup>
+
+## Access control
+
+- `subscription_plans` rows are readable by all authenticated users (public read policy).
+- `tenant_subscriptions` rows are readable only by members of the tenant.
+- Only super-admins can insert, update, or delete `tenant_subscriptions` rows.
+- `tenant_usage_events` rows are readable and writable by all tenant members.

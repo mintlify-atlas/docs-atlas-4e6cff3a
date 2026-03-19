@@ -1,0 +1,170 @@
+---
+title: "Macro Tables"
+description: "Cross-project aggregation views in Sintesis — combine rows from multiple obra tablas into a single configurable spreadsheet with source, custom, and computed columns."
+---
+
+A **macro table** is a cross-project view that pulls rows from obra tablas across multiple obras and presents them in a single, unified spreadsheet. Macro tables are configured per tenant and support three column types: source columns (read-only data from obra tablas), custom columns (editable per-row data stored separately), and computed columns (derived automatically, e.g. the obra name).
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="Portfolio overview" icon="chart-bar">
+    Aggregate certificate data from dozens of obras into one filterable table for portfolio-level analysis.
+  </Card>
+  <Card title="Cross-project comparison" icon="code-compare">
+    Compare specific tabla fields (amounts, dates, percentages) side-by-side across all active obras.
+  </Card>
+  <Card title="Custom enrichment" icon="pen-to-square">
+    Add custom columns to annotate rows with data that does not exist in any source tabla, without modifying the underlying obra records.
+  </Card>
+  <Card title="Sidebar shortcuts" icon="sidebar">
+    Admins can pin macro tables to the sidebar for specific roles, so teams see the most relevant cross-project views immediately on login.
+  </Card>
+</CardGroup>
+
+## Macro table schema
+
+### `macro_tables` — table definitions
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key. |
+| `tenant_id` | `uuid` | Owning tenant. |
+| `name` | `text` | Display name (unique per tenant). |
+| `description` | `text` | Optional description shown in the UI. |
+| `settings` | `jsonb` | Freeform settings object for future configuration. |
+| `created_at` / `updated_at` | `timestamptz` | Timestamps. |
+
+### `macro_table_sources` — source obra tablas
+
+Each macro table can aggregate data from multiple `obra_tablas`. Each source link records:
+
+| Column | Type | Description |
+|---|---|---|
+| `macro_table_id` | `uuid` | Parent macro table. |
+| `obra_tabla_id` | `uuid` | The obra tabla being sourced. |
+| `position` | `integer` | Display order of sources. |
+
+### `macro_table_columns` — column definitions
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key. |
+| `macro_table_id` | `uuid` | Parent macro table. |
+| `column_type` | `text` | One of `source`, `custom`, or `computed`. |
+| `source_field_key` | `text` | For `source` columns: the `field_key` from the obra tabla column. |
+| `label` | `text` | Column header shown in the UI. |
+| `data_type` | `text` | One of `text`, `number`, `currency`, `boolean`, `date`. |
+| `position` | `integer` | Display order. |
+| `config` | `jsonb` | Aggregation settings, formatting options, etc. |
+
+### `macro_table_custom_values` — custom column data
+
+Custom column values are stored separately from source data, keyed by the source row:
+
+| Column | Type | Description |
+|---|---|---|
+| `macro_table_id` | `uuid` | Parent macro table. |
+| `source_row_id` | `uuid` | References `obra_tabla_rows.id` (no foreign key for flexibility). |
+| `column_id` | `uuid` | The custom column being set. |
+| `value` | `jsonb` | The cell value (any JSON type). |
+
+## Column types
+
+<AccordionGroup>
+  <Accordion title="Source columns">
+    Source columns display read-only data pulled directly from the `obra_tabla_rows` of each source. Cells are rendered with a neutral background. The `source_field_key` must match a `field_key` defined on the `obra_tabla_columns` of the linked obra tabla.
+  </Accordion>
+  <Accordion title="Custom columns">
+    Custom columns are editable. Their values are stored in `macro_table_custom_values`, keyed by the source row ID. In the UI, custom column cells are highlighted with an amber tint to indicate they are user-editable. On save, only cells belonging to custom columns are written back to the database.
+  </Accordion>
+  <Accordion title="Computed columns">
+    Computed columns derive their value automatically. The most common computed column is the obra name (`_obraName`), which is injected automatically if no obra-named column is already present. Computed cells are shown on a slightly darker background. They cannot be edited.
+  </Accordion>
+</AccordionGroup>
+
+## Data types
+
+Macro table columns support the following data types, which control both the cell renderer and the filter component:
+
+| Data type | Cell renderer | Filter type |
+|---|---|---|
+| `text` | Text with tooltip on overflow | Text contains filter |
+| `number` | Localised number (`es-AR`) | Min/max range |
+| `currency` | ARS currency format | Min/max range |
+| `boolean` | Checkbox | Todos / Sí / No toggle |
+| `date` | Date string | Date range (from / to) |
+
+## Using the macro tables page
+
+Navigate to **Panel de macrotablas** (`/macro`) to view and interact with all configured macro tables.
+
+### Switching tables
+
+If your tenant has more than one macro table, tabs appear at the top of the page. Click a tab to switch to that macro table. The active tab is preserved in the `?macroId=` URL parameter so you can share a direct link.
+
+### Navigating to an obra
+
+Every row includes an obra name column that links directly to `/excel/[obraId]`. Hover over the link to prefetch the obra detail page for faster navigation.
+
+### Filtering and searching
+
+The macro table toolbar includes:
+- An inline search box to filter rows across all visible text
+- A filter panel with per-column controls appropriate to each data type
+
+### Editing custom columns
+
+<Steps>
+  <Step title="Locate a custom column">
+    Custom columns are highlighted in amber. Hover over a cell to confirm it is editable.
+  </Step>
+  <Step title="Click the cell">
+    Click to enter edit mode. Enter your value using the control appropriate to the column's data type.
+  </Step>
+  <Step title="Save changes">
+    Click the **Save** button in the toolbar (or navigate away — unsaved changes are flagged). Sintesis posts only the changed custom values to `/api/macro-tables/[id]/rows`.
+  </Step>
+</Steps>
+
+### Generating a report
+
+From any macro table, click **Generar reporte** to navigate to the macro table report view at `/macro/[id]/reporte`.
+
+## Sidebar macro tables
+
+Admins can configure which macro tables appear in the sidebar for each role via `sidebar_macro_tables`. This lets you surface the most relevant cross-project view directly in navigation without requiring users to find it manually.
+
+### `sidebar_macro_tables` schema
+
+| Column | Type | Description |
+|---|---|---|
+| `role_id` | `uuid` | The role that sees this macro table in the sidebar. |
+| `macro_table_id` | `uuid` | The macro table to show. |
+| `position` | `integer` | Display order in the sidebar. |
+
+The helper function `get_user_sidebar_macro_tables(user_id, tenant_id)` returns the ordered list of macro tables visible in the sidebar for a given user based on their assigned roles.
+
+## Creating a macro table
+
+<Steps>
+  <Step title="Click Nueva macro tabla">
+    From the macro tables page, click **Nueva macro tabla** in the toolbar. You are redirected to `/admin/macro-tables/new`.
+  </Step>
+  <Step title="Define the name and description">
+    Enter a unique name for the macro table. The name must be unique within your tenant.
+  </Step>
+  <Step title="Add sources">
+    Select one or more obra tablas to source data from. Each source contributes its rows to the macro table.
+  </Step>
+  <Step title="Configure columns">
+    Add source, custom, or computed columns. Set the data type and label for each. Drag to reorder.
+  </Step>
+  <Step title="Save and configure sidebar visibility">
+    Save the macro table, then go to **Configurar** to assign it to roles for sidebar visibility.
+  </Step>
+</Steps>
+
+<Note>
+  The macro table name is normalised (diacritics removed, lowercased) when checking for the `Certificado Contable` macro table. If you name a macro table with this pattern, it is automatically used to derive `certificado_a_la_fecha` values on obra general tabs.
+</Note>

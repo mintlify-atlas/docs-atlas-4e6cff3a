@@ -1,0 +1,115 @@
+---
+title: "API Overview"
+description: "Authentication, multi-tenant scoping, rate limiting, and common conventions for the Sintesis REST API."
+---
+
+## Base URL
+
+All API routes are served under the same origin as the application:
+
+```
+https://<your-domain>/api
+```
+
+There is no versioned prefix. Routes are stable within a major release.
+
+## Authentication
+
+All endpoints use **Supabase SSR cookie-based authentication**. There are no API keys or bearer tokens for client-facing routes — authentication is handled entirely through the session cookie set by Supabase Auth after sign-in.
+
+### How it works
+
+Every request handler calls `createSupabaseServerClient()` (aliased as `createClient`) which reads the `sb-*` session cookies from the incoming request and validates them with Supabase. If no valid session is found the handler returns `401 Unauthorized`.
+
+```typescript
+// Typical auth check inside a route handler
+const supabase = await createClient();
+const { data: { user } } = await supabase.auth.getUser();
+
+if (!user) {
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+}
+```
+
+<Note>
+Because authentication relies on cookies, all API requests must be made from the same origin (browser) or include the session cookie explicitly. Cross-origin requests from a separate client must first obtain a valid session through Supabase Auth.
+</Note>
+
+### Health endpoint exception
+
+`GET /api/health` is publicly accessible. If the `HEALTHCHECK_TOKEN` environment variable is set, the request must include the token via the `x-health-token` header or the `token` query parameter.
+
+## Multi-tenant scoping
+
+Sintesis is a multi-tenant platform. Every authenticated request is automatically scoped to the user's **active tenant**.
+
+The active tenant is resolved in this order:
+
+1. The `sintesis_active_tenant` cookie (set when the user explicitly switches tenants via `POST /api/tenants/{tenantId}/switch`).
+2. The user's oldest membership record as a fallback.
+
+All database queries include a `tenant_id` filter. A user cannot read or modify data belonging to another tenant, even if they construct a request manually — Supabase Row Level Security (RLS) enforces the same constraints at the database layer.
+
+If the resolved `tenantId` is `null` (user has no memberships), most list endpoints return an empty result rather than an error.
+
+## Rate limiting
+
+Selected endpoints are protected by **Upstash Redis-based rate limiting**. Limits vary by endpoint sensitivity. When a rate limit is exceeded the API returns:
+
+```json
+{ "error": "Too many requests" }
+```
+
+with HTTP status `429 Too Many Requests`.
+
+## Error response format
+
+All error responses follow a consistent JSON structure:
+
+```json
+{
+  "error": "Human-readable error message",
+  "details": { }  // optional — validation error details (Zod flatten output)
+}
+```
+
+<ResponseField name="error" type="string" required>
+  A human-readable description of what went wrong.
+</ResponseField>
+
+<ResponseField name="details" type="object">
+  Present only for validation errors (`400`). Contains a Zod `flatten()` error map with `formErrors` and `fieldErrors` keys.
+</ResponseField>
+
+## Common HTTP status codes
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Success |
+| `400` | Bad request — missing or invalid parameters |
+| `401` | Unauthenticated — no valid session cookie |
+| `402` | Usage limit exceeded (storage, AI tokens, or WhatsApp messages) |
+| `403` | Forbidden — authenticated but not authorized for the requested resource |
+| `404` | Resource not found |
+| `410` | Gone — resource existed but is no longer available (e.g. expired share link) |
+| `429` | Rate limit exceeded |
+| `500` | Internal server error |
+
+## Pagination
+
+Endpoints that support pagination accept `page` and `limit` query parameters and return a `pagination` object in the response:
+
+```json
+{
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 243,
+    "totalPages": 5,
+    "hasNextPage": true,
+    "hasPreviousPage": false
+  }
+}
+```
+
+`limit` is clamped to a maximum of `500` for obras and certificados, and `200` for macro table rows.

@@ -1,0 +1,462 @@
+---
+title: "Macro Tables"
+description: "Endpoints for managing macro tables — cross-obra aggregation views with configurable columns and editable custom values."
+---
+
+Macro tables aggregate rows from multiple `obra_tablas` across different obras into a single view. Each macro table has a set of columns (source, custom, or computed) and an optional set of source obra_tablas.
+
+Sources can be selected in two modes:
+- **Explicit** — specific `obra_tablas` are linked to the macro table.
+- **Template** (`sourceMode: "template"`) — sources are resolved dynamically based on a `defaultTablaId` pattern, matching tables across all obras in the tenant.
+
+---
+
+## List macro tables
+
+<ParamField path="GET /api/macro-tables" type="string" />
+
+Returns all macro tables for the authenticated user's active tenant, including their columns and resolved sources.
+
+### Response
+
+<ResponseField name="macroTables" type="MacroTable[]" required>
+  Array of macro table objects.
+  <Expandable title="MacroTable properties">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="tenantId" type="string">Tenant UUID.</ResponseField>
+    <ResponseField name="name" type="string">Display name (unique per tenant).</ResponseField>
+    <ResponseField name="description" type="string | null">Optional description.</ResponseField>
+    <ResponseField name="settings" type="object">Source selection settings (includes `sourceMode`).</ResponseField>
+    <ResponseField name="sourceCount" type="number">Number of resolved source tablas.</ResponseField>
+    <ResponseField name="sources" type="Source[]">
+      Explicit source links.
+      <Expandable title="Source properties">
+        <ResponseField name="id" type="string">Source UUID.</ResponseField>
+        <ResponseField name="macroTableId" type="string">Parent macro table UUID.</ResponseField>
+        <ResponseField name="obraTablaId" type="string">Linked obra_tabla UUID.</ResponseField>
+        <ResponseField name="position" type="number">Display order.</ResponseField>
+      </Expandable>
+    </ResponseField>
+    <ResponseField name="columns" type="Column[]">
+      Column definitions.
+      <Expandable title="Column properties">
+        <ResponseField name="id" type="string">UUID.</ResponseField>
+        <ResponseField name="macroTableId" type="string">Parent macro table UUID.</ResponseField>
+        <ResponseField name="columnType" type="string">`source`, `custom`, or `computed`.</ResponseField>
+        <ResponseField name="sourceFieldKey" type="string | null">Field key from source rows (for `source` columns). Prefix `obra.` to reference obra fields.</ResponseField>
+        <ResponseField name="label" type="string">Display label.</ResponseField>
+        <ResponseField name="dataType" type="string">Data type (`text`, `number`, `date`, etc.).</ResponseField>
+        <ResponseField name="position" type="number">Display order.</ResponseField>
+        <ResponseField name="config" type="object">Column configuration (aggregation settings, computed type, etc.).</ResponseField>
+      </Expandable>
+    </ResponseField>
+    <ResponseField name="createdAt" type="string">ISO 8601 creation timestamp.</ResponseField>
+    <ResponseField name="updatedAt" type="string">ISO 8601 update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/macro-tables' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "macroTables": [
+        {
+          "id": "mt-uuid-...",
+          "tenantId": "tenant-uuid-...",
+          "name": "Resumen de materiales",
+          "description": null,
+          "settings": { "sourceMode": "explicit" },
+          "sourceCount": 3,
+          "sources": [
+            { "id": "src-uuid-...", "macroTableId": "mt-uuid-...", "obraTablaId": "ot-uuid-...", "position": 0 }
+          ],
+          "columns": [
+            { "id": "col-uuid-...", "macroTableId": "mt-uuid-...", "columnType": "source", "sourceFieldKey": "material", "label": "Material", "dataType": "text", "position": 0, "config": {} }
+          ],
+          "createdAt": "2024-05-01T00:00:00Z",
+          "updatedAt": "2024-06-01T00:00:00Z"
+        }
+      ]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Create a macro table
+
+<ParamField path="POST /api/macro-tables" type="string" />
+
+Creates a new macro table with sources and columns. At least one source and one column are required.
+
+### Request body
+
+<ParamField body="name" type="string" required>Display name. Must be unique within the tenant.</ParamField>
+<ParamField body="description" type="string">Optional description.</ParamField>
+<ParamField body="settings" type="object">Source selection settings.</ParamField>
+<ParamField body="sources" type="SourceInput[]" required>
+  Source obra_tablas. Must contain at least one item.
+  <Expandable title="SourceInput fields">
+    <ParamField body="obraTablaId" type="string" required>UUID of the obra_tabla to include as a source. Must belong to an obra in the tenant.</ParamField>
+  </Expandable>
+</ParamField>
+<ParamField body="columns" type="ColumnInput[]" required>
+  Column definitions. Must contain at least one item.
+  <Expandable title="ColumnInput fields">
+    <ParamField body="label" type="string" required>Display label.</ParamField>
+    <ParamField body="columnType" type="string" default="source">`source`, `custom`, or `computed`.</ParamField>
+    <ParamField body="sourceFieldKey" type="string | null">Required for `source` columns. Field key from source rows or `obra.<fieldName>` to reference obra fields.</ParamField>
+    <ParamField body="dataType" type="string" default="text">Data type of the column.</ParamField>
+    <ParamField body="config" type="object">Column configuration.</ParamField>
+  </Expandable>
+</ParamField>
+
+### Response
+
+<ResponseField name="macroTable" type="MacroTable" required>The newly created macro table with its sources and columns.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X POST 'https://<domain>/api/macro-tables' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "name": "Resumen de materiales",
+        "sources": [{ "obraTablaId": "ot-uuid-..." }],
+        "columns": [
+          { "label": "Material", "columnType": "source", "sourceFieldKey": "material", "dataType": "text" },
+          { "label": "Cantidad", "columnType": "source", "sourceFieldKey": "cantidad", "dataType": "number" }
+        ]
+      }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "macroTable": {
+        "id": "mt-uuid-...",
+        "name": "Resumen de materiales",
+        "sources": [{ "id": "src-uuid-...", "obraTablaId": "ot-uuid-...", "position": 0 }],
+        "columns": [
+          { "id": "col-1-uuid", "label": "Material", "columnType": "source", "dataType": "text", "position": 0, "config": {} },
+          { "id": "col-2-uuid", "label": "Cantidad", "columnType": "source", "dataType": "number", "position": 1, "config": {} }
+        ]
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Get a macro table
+
+<ParamField path="GET /api/macro-tables/{id}" type="string" />
+
+Returns a single macro table by UUID, including fully resolved sources (with obra and tabla metadata) and columns.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the macro table.</ParamField>
+
+### Response
+
+<ResponseField name="macroTable" type="MacroTable" required>
+  The macro table object. In template source mode, sources include dynamically resolved obra_tablas.
+</ResponseField>
+
+---
+
+## Update a macro table
+
+<ParamField path="PATCH /api/macro-tables/{id}" type="string" />
+
+Partially updates a macro table. Supplying `sources` or `columns` replaces those lists entirely (existing entries are deleted and new ones inserted). Fields not supplied are left unchanged.
+
+<Warning>
+When `columns` is supplied, existing custom values for deleted columns are also removed via cascade.
+</Warning>
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the macro table.</ParamField>
+
+### Request body
+
+<ParamField body="name" type="string">New display name.</ParamField>
+<ParamField body="description" type="string">New description (empty string sets it to null).</ParamField>
+<ParamField body="settings" type="object">Updated source selection settings.</ParamField>
+<ParamField body="sources" type="SourceInput[]">Replacement source list. Replaces all existing sources.</ParamField>
+<ParamField body="columns" type="ColumnInput[]">Replacement column list. Replaces all existing columns.</ParamField>
+
+### Response
+
+<ResponseField name="macroTable" type="MacroTable" required>The updated macro table with resolved sources and columns.</ResponseField>
+
+---
+
+## Delete a macro table
+
+<ParamField path="DELETE /api/macro-tables/{id}" type="string" />
+
+Permanently deletes a macro table and all related data (sources, columns, and custom values) via cascade.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the macro table.</ParamField>
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+
+---
+
+## List rows
+
+<ParamField path="GET /api/macro-tables/{id}/rows" type="string" />
+
+Returns aggregated rows from all resolved source tablas, with source and custom column values mapped. Supports pagination, search, and structured filters.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the macro table.</ParamField>
+
+### Query parameters
+
+<ParamField query="page" type="number" default="1">Page number.</ParamField>
+<ParamField query="limit" type="number" default="50">Results per page. Clamped between `1` and `200`.</ParamField>
+<ParamField query="q" type="string">Full-text search across all display columns.</ParamField>
+<ParamField query="obraId" type="string">Filter rows to only those from the obra with this UUID.</ParamField>
+<ParamField query="filters" type="string">URL-encoded JSON object of structured filters keyed by column ID.</ParamField>
+
+### Response
+
+<ResponseField name="rows" type="MacroTableRow[]" required>
+  Paginated array of row objects. Each row contains:
+  - `id` — UUID of the source row from `obra_tabla_rows`
+  - `_sourceTablaId` — UUID of the source tabla
+  - `_sourceTablaName` — Name of the source tabla
+  - `_obraId` — UUID of the parent obra
+  - `_obraName` — Name of the parent obra
+  - One key per column ID with the resolved value
+</ResponseField>
+
+<ResponseField name="columns" type="Column[]" required>Column definitions for the macro table.</ResponseField>
+
+<ResponseField name="pagination" type="object" required>
+  <Expandable title="Pagination properties">
+    <ResponseField name="page" type="number" />
+    <ResponseField name="limit" type="number" />
+    <ResponseField name="total" type="number" />
+    <ResponseField name="totalPages" type="number" />
+    <ResponseField name="hasNextPage" type="boolean" />
+    <ResponseField name="hasPreviousPage" type="boolean" />
+  </Expandable>
+</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/macro-tables/mt-uuid-.../rows?page=1&limit=25' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "rows": [
+        {
+          "id": "row-uuid-...",
+          "_sourceTablaId": "ot-uuid-...",
+          "_sourceTablaName": "Materiales",
+          "_obraId": "obra-uuid-...",
+          "_obraName": "Escuela N° 42",
+          "col-1-uuid": "Cemento Portland",
+          "col-2-uuid": 50
+        }
+      ],
+      "columns": [
+        { "id": "col-1-uuid", "label": "Material", "columnType": "source", "dataType": "text", "position": 0 },
+        { "id": "col-2-uuid", "label": "Cantidad", "columnType": "source", "dataType": "number", "position": 1 }
+      ],
+      "pagination": { "page": 1, "limit": 25, "total": 1, "totalPages": 1, "hasNextPage": false, "hasPreviousPage": false }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Save custom values
+
+<ParamField path="POST /api/macro-tables/{id}/rows" type="string" />
+
+Upserts custom column values for one or more rows. Only columns with `columnType: "custom"` are accepted; values for other column types are silently ignored.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the macro table.</ParamField>
+
+### Request body
+
+<ParamField body="customValues" type="CustomValueInput[]" required>
+  Array of custom values to upsert.
+  <Expandable title="CustomValueInput fields">
+    <ParamField body="sourceRowId" type="string" required>UUID of the `obra_tabla_rows` row this value belongs to.</ParamField>
+    <ParamField body="columnId" type="string" required>UUID of the custom macro table column.</ParamField>
+    <ParamField body="value" type="any" required>The value to store (any JSON-serializable type).</ParamField>
+  </Expandable>
+</ParamField>
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+<ResponseField name="updated" type="number" required>Number of custom values upserted.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X POST 'https://<domain>/api/macro-tables/mt-uuid-.../rows' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "customValues": [
+          {
+            "sourceRowId": "row-uuid-...",
+            "columnId": "col-custom-uuid",
+            "value": "Aprobado"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    { "ok": true, "updated": 1 }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Get sidebar assignments
+
+<ParamField path="GET /api/macro-tables/{id}/sidebar" type="string" />
+
+Returns the role-based sidebar visibility assignments for a macro table, along with all available roles for the tenant. Requires `admin` or `owner` role (or superadmin).
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the macro table.</ParamField>
+
+### Response
+
+<ResponseField name="assignments" type="object[]" required>
+  Current sidebar assignments.
+  <Expandable title="Assignment properties">
+    <ResponseField name="id" type="string">Assignment UUID.</ResponseField>
+    <ResponseField name="role_id" type="string">UUID of the assigned role.</ResponseField>
+    <ResponseField name="position" type="number">Display position in the sidebar.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="roles" type="object[]" required>
+  All roles available for the tenant.
+  <Expandable title="Role properties">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="key" type="string">Machine-readable role key.</ResponseField>
+    <ResponseField name="name" type="string">Display name.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="tenantName" type="string | null" required>Display name of the tenant that owns this macro table.</ResponseField>
+
+---
+
+## Set sidebar assignments
+
+<ParamField path="POST /api/macro-tables/{id}/sidebar" type="string" />
+
+Replaces the sidebar role assignments for a macro table. Roles present in `roleIds` are added; roles previously assigned but not in the list are removed.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the macro table.</ParamField>
+
+### Request body
+
+<ParamField body="roleIds" type="string[]" required>
+  Array of role UUIDs that should have this macro table visible in their sidebar.
+</ParamField>
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X POST 'https://<domain>/api/macro-tables/mt-uuid-.../sidebar' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{ "roleIds": ["role-uuid-1", "role-uuid-2"] }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    { "ok": true }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## List table templates
+
+<ParamField path="GET /api/macro-tables/templates" type="string" />
+
+Returns the default tabla templates defined for the tenant. Templates represent reusable tabla structures that can be used as the basis for macro table source selection in template mode.
+
+### Response
+
+<ResponseField name="templates" type="DefaultTabla[]" required>
+  <Expandable title="DefaultTabla properties">
+    <ResponseField name="id" type="string">UUID of the default tabla.</ResponseField>
+    <ResponseField name="name" type="string">Display name.</ResponseField>
+    <ResponseField name="description" type="string | null">Optional description.</ResponseField>
+    <ResponseField name="sourceType" type="string">Source type identifier.</ResponseField>
+    <ResponseField name="columnCount" type="number">Number of columns defined in this template.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/macro-tables/templates' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "templates": [
+        {
+          "id": "tmpl-uuid-...",
+          "name": "Planilla de materiales",
+          "description": "Estructura estándar para registro de materiales",
+          "sourceType": "materials",
+          "columnCount": 5
+        }
+      ]
+    }
+    ```
+  </Tab>
+</Tabs>

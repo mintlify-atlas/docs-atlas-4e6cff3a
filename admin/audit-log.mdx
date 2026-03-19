@@ -1,0 +1,165 @@
+---
+title: "Audit log"
+description: "What is recorded in the audit log, how to view it, and how to filter and interpret entries."
+---
+
+Sintesis maintains a tamper-evident audit log that records every meaningful change to tenant data. The log is written by PostgreSQL triggers so no application-layer code can bypass it. Only tenant admins and owners can view their tenant's log.
+
+## What is logged
+
+Audit triggers are attached to the following tables:
+
+<Tabs>
+  <Tab title="Project data">
+
+  | Table | Trigger attached | Description |
+  |---|---|---|
+  | `obras` | `audit_log_obras` | Project creation, edits, and deletion |
+  | `obra_tablas` | `audit_log_obra_tablas` | OCR table creation/configuration |
+  | `obra_tabla_columns` | `audit_log_obra_tabla_columns` | Column definitions within OCR tables |
+  | `obra_tabla_rows` | `audit_log_obra_tabla_rows` | Individual data row changes |
+  | `obra_flujo_actions` | `audit_log_flujo_actions` | Workflow action events |
+  | `obra_pendientes` | `audit_log_pendientes` | Task/pending item changes |
+  | `pendiente_schedules` | `audit_log_pendiente_schedules` | Reminder schedule changes |
+  | `certificates` | `audit_log_certificates` | Certificate creation and edits |
+  | `calendar_events` | `audit_log_calendar_events` | Calendar event changes |
+
+  </Tab>
+  <Tab title="Documents & OCR">
+
+  | Table | Trigger attached | Description |
+  |---|---|---|
+  | `obra_document_uploads` | `audit_log_obra_document_uploads` | Document uploads and deletions |
+  | `ocr_document_processing` | `audit_log_ocr_document_processing` | OCR processing job lifecycle |
+  | `ocr_templates` | `audit_log_ocr_templates` | OCR template configuration |
+
+  </Tab>
+  <Tab title="Macro tables & configuration">
+
+  | Table | Trigger attached | Description |
+  |---|---|---|
+  | `macro_tables` | `audit_log_macro_tables` | Macro table creation and settings |
+  | `macro_table_sources` | `audit_log_macro_table_sources` | Data source changes |
+  | `macro_table_columns` | `audit_log_macro_table_columns` | Column definition changes |
+  | `macro_table_custom_values` | `audit_log_macro_table_custom_values` | Custom value edits |
+  | `sidebar_macro_tables` | `audit_log_sidebar_macro_tables` | Sidebar visibility configuration |
+  | `obra_default_folders` | `audit_log_obra_default_folders` | Default folder template changes |
+  | `obra_default_tablas` | `audit_log_obra_default_tablas` | Default table template changes |
+  | `obra_default_tabla_columns` | `audit_log_obra_default_tabla_columns` | Default column changes |
+  | `tenant_main_table_configs` | `audit_log_tenant_main_table_configs` | Main table configuration changes |
+
+  </Tab>
+</Tabs>
+
+## Audit log schema
+
+All events land in the `audit_log` table:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key |
+| `tenant_id` | `uuid` | Owning tenant (nullable; entries without a tenant are silently discarded by the trigger) |
+| `actor_id` | `uuid` | `auth.uid()` of the user who triggered the change, or `app.current_actor` for background jobs |
+| `actor_email` | `text` | Email from the JWT, or `app.current_actor_email` for background jobs |
+| `table_name` | `text` | The table that was modified |
+| `row_pk` | `jsonb` | Primary key column(s) and their values (e.g., `{"id": "abc-123"}`) |
+| `action` | `text` | `INSERT`, `UPDATE`, or `DELETE` |
+| `changed_keys` | `text[]` | For `UPDATE` events: the column names whose values changed. `NULL` for inserts and deletes. |
+| `before_data` | `jsonb` | Full row state before the change (`UPDATE`/`DELETE` only) |
+| `after_data` | `jsonb` | Full row state after the change (`INSERT`/`UPDATE` only) |
+| `context` | `jsonb` | Reserved for additional structured context |
+| `created_at` | `timestamptz` | When the event was recorded |
+
+Indexes on `(tenant_id, created_at DESC)` and `(table_name, created_at DESC)` ensure fast filtering by tenant and table.
+
+### Tenant resolution in triggers
+
+The `record_audit_log()` trigger function supports two modes for resolving the tenant of a changed row:
+
+- **Direct column** (`tenant_hint = 'tenant_id'`): The row has a `tenant_id` column and the value is used directly.
+- **FK lookup** (`tenant_hint = 'fk:parent_table:fk_column'`): The row references a parent table and the trigger walks the foreign key chain to find `tenant_id`. For tables like `obra_tablas` (which do not have a direct `tenant_id` column), the trigger walks up through `obras` to resolve the tenant.
+
+### Actor resolution
+
+The trigger first tries `auth.uid()` (the authenticated Supabase user). For background operations that run outside a user session, it falls back to reading the `app.current_actor` session variable. The same fallback applies to `actor_email` vs `app.current_actor_email`.
+
+## Noise reduction
+
+Migration `0086` added a guard against high-frequency metadata noise: if an `UPDATE` event's only changed column is `updated_at`, the trigger returns early without writing an audit row. This prevents timestamp-only heartbeat updates from flooding the log.
+
+```sql
+-- Simplified noise filter in record_audit_log()
+SELECT COALESCE(array_agg(key), ARRAY[]::text[])
+INTO changed_without_meta
+FROM unnest(changed) AS key
+WHERE key <> 'updated_at';
+
+IF COALESCE(array_length(changed_without_meta, 1), 0) = 0 THEN
+  RETURN NEW;  -- Skip this update
+END IF;
+```
+
+The application layer applies the same filter when reading the log: `isMetadataOnlyUpdate()` returns `true` for any remaining `UPDATE` rows where `changed_keys` contains only `updated_at` (or only `data` with no cell-level changes), and those rows are excluded from the display.
+
+## Viewing audit logs
+
+Navigate to **Admin → Audit log** (`/admin/audit-log`). The page is restricted to users with `allowedRoles: ["admin"]`.
+
+The log is displayed as a grouped, paginated table with 50 groups per page. Events from the same actor, table, action, and second are automatically collapsed into a single group to reduce visual noise from bulk operations.
+
+Each row in the table shows:
+
+| Column | Description |
+|---|---|
+| Moment | Relative timestamp (e.g., "3 minutes ago") with the absolute timestamp on hover |
+| Table | The database table name rendered as a code badge |
+| Action | `INSERT` (secondary badge), `UPDATE` (default badge), or `DELETE` (destructive badge) |
+| User | Actor email as the primary identifier, actor UUID shown below if both are available. Falls back to "Sistema" for background jobs. |
+| Detail | Natural-language summary of the change, changed field names, and an expandable section showing raw `before_data`/`after_data` JSON |
+
+### Natural-language summaries
+
+The UI builds readable summaries for common event types:
+
+| Table | Example summary |
+|---|---|
+| `obras` | "Edito una obra (nombre, descripcion) (Obra #42)" |
+| `obra_document_uploads` | "Subio un documento (contrato.pdf) en la carpeta contratos de la obra Edificio Norte" |
+| `obra_tabla_rows` | "Edito una fila de datos" |
+| `ocr_document_processing` | "Inicio un proceso de OCR" |
+| Other tables | "Creo un registro en certificados" / "Elimino un registro de flujos" |
+
+## Filtering the audit log
+
+Four filter controls are available at the top of the page:
+
+<CardGroup cols={2}>
+  <Card title="Search" icon="magnifying-glass">
+    Free-text search across `actor_email`, `table_name`, and primary key values (`row_pk->>id`, `row_pk->>obra_id`). Commas are stripped from the input before the query.
+  </Card>
+  <Card title="Table filter" icon="table">
+    Dropdown listing all audited tables. Selecting a specific table adds an `eq('table_name', ...)` filter to the query.
+  </Card>
+  <Card title="Action filter" icon="bolt">
+    Filter to `INSERT` (Creaciones), `UPDATE` (Actualizaciones), or `DELETE` (Eliminaciones) only.
+  </Card>
+  <Card title="Technical events" icon="code">
+    A checkbox to include or exclude structural/configuration table events. When unchecked (the default), the following tables are hidden: `obra_tablas`, `obra_tabla_columns`, `obra_default_folders`, `obra_default_tablas`, `obra_default_tabla_columns`, `macro_table_sources`, `macro_table_columns`, `sidebar_macro_tables`, `tenant_main_table_configs`.
+  </Card>
+</CardGroup>
+
+All filters are reflected in the URL query string, making filtered views shareable and bookmarkable.
+
+## Pagination
+
+The log fetches data in chunks of 1 000 rows from the database and groups them client-side before paginating at 50 groups per page. Pagination links preserve all active filter parameters. When the total number of groups is known (no more rows to fetch), the page shows "Página N de M"; while more rows exist it shows "Página N".
+
+## Access control and retention
+
+- The `audit_log` insert policy allows all authenticated sessions (`WITH CHECK (true)`) so that triggers from any table owner can write rows.
+- The `audit_log` select policy restricts reads to `is_admin_of(tenant_id)` — only `admin` and `owner` members of a tenant can query that tenant's audit entries.
+- There is currently no automated retention or purge policy. All audit rows are retained indefinitely.
+
+<Note>
+Because audit triggers write with `SECURITY DEFINER` and the trigger function resolves the tenant from the row data, it is not possible for a regular user to insert crafted entries into another tenant's audit log. Entries with a `NULL` tenant are silently dropped by the trigger.
+</Note>

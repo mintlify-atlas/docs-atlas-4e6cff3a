@@ -1,0 +1,481 @@
+---
+title: "Notifications"
+description: "In-app, email, and WhatsApp notifications — powered by Supabase Realtime, Resend, and the WhatsApp Business API."
+---
+
+Sintesis delivers notifications across three channels: **in-app** (realtime via Supabase), **email** (via Resend), and **WhatsApp** (via the WhatsApp Business API). All channels flow through the same rule-based engine so delivery logic is defined once and shared.
+
+## In-app notifications
+
+### Schema
+
+```sql
+CREATE TABLE notifications (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  tenant_id   UUID REFERENCES tenants(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  body        TEXT,
+  type        TEXT NOT NULL DEFAULT 'info',
+  action_url  TEXT,
+  data        JSONB NOT NULL DEFAULT '{}',
+  read_at     TIMESTAMPTZ,       -- NULL = unread
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+| Column | Description |
+|---|---|
+| `type` | Semantic category: `info`, `success`, `reminder`, `flujo_email`, etc. |
+| `action_url` | Deep link to the relevant obra or document |
+| `data` | Arbitrary JSON payload — used by the UI to render richer cards |
+| `read_at` | Set when the user marks the notification as read; `NULL` means unread |
+| `pendiente_id` | Optional link to an `obra_pendientes` record |
+
+### Realtime delivery
+
+The `notifications` table is added to the `supabase_realtime` publication so every `INSERT` streams to subscribed clients without polling:
+
+```sql
+ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
+```
+
+Clients subscribe to their own user channel:
+
+```typescript
+const channel = supabase
+  .channel("notifications")
+  .on(
+    "postgres_changes",
+    {
+      event: "INSERT",
+      schema: "public",
+      table: "notifications",
+      filter: `user_id=eq.${userId}`,
+    },
+    (payload) => {
+      // show toast or update badge count
+    }
+  )
+  .subscribe();
+```
+
+### Row-level security
+
+Users can only read, insert, update, and delete their own notifications:
+
+```sql
+CREATE POLICY "read own notifications"
+  ON notifications FOR SELECT
+  USING (user_id = auth.uid());
+
+CREATE POLICY "insert own notifications"
+  ON notifications FOR INSERT
+  WITH CHECK (user_id = auth.uid());
+```
+
+Workflow steps that insert notifications on behalf of other users (e.g. flujo actions) call the `workflow_insert_notification` RPC with service-role credentials:
+
+```sql
+CREATE FUNCTION workflow_insert_notification(payload jsonb)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  INSERT INTO notifications (
+    user_id, tenant_id, title, body,
+    type, action_url, pendiente_id, data
+  ) VALUES (
+    (payload->>'user_id')::uuid,
+    (payload->>'tenant_id')::uuid,
+    payload->>'title',
+    payload->>'body',
+    payload->>'type',
+    payload->>'action_url',
+    (payload->>'pendiente_id')::uuid,
+    payload->'data'
+  );
+END;
+$$;
+```
+
+## The notification engine
+
+All notification delivery — regardless of channel or timing — goes through `lib/notifications/engine.ts`.
+
+### Defining a rule
+
+```typescript
+import { defineRule } from "@/lib/notifications/engine";
+
+defineRule("obra.completed", {
+  recipients: async (ctx) => {
+    // Return an array of user_ids to notify
+    const ids: string[] = [];
+    if (ctx.actorId) ids.push(ctx.actorId);
+    return ids;
+  },
+  effects: [
+    {
+      channel: "in-app",
+      when: "now",
+      title: (ctx) => `Obra completada`,
+      body: (ctx) => `La obra "${ctx.obra?.name}" alcanzó el 100%.`,
+      actionUrl: (ctx) => ctx.obra?.id ? `/excel/${ctx.obra.id}` : null,
+      type: "success",
+    },
+    {
+      channel: "email",
+      when: (ctx) => ctx.followUpAt
+        ? new Date(ctx.followUpAt)
+        : new Date(Date.now() + 2 * 60 * 1000),
+      subject: (ctx) => `Seguimiento: ${ctx.obra?.name}`,
+      html: (ctx) => `<p>La obra <strong>${ctx.obra?.name}</strong> fue completada.</p>`,
+    },
+  ],
+});
+```
+
+### Effect definition fields
+
+| Field | Type | Description |
+|---|---|---|
+| `channel` | `"in-app" \| "email"` | Delivery channel |
+| `when` | `"now" \| Date \| (ctx) => ...` | Delivery time; past dates are treated as `"now"` |
+| `title` | `(ctx) => string` | Notification title (in-app) |
+| `body` | `(ctx) => string` | Notification body (in-app) |
+| `subject` | `(ctx) => string` | Email subject |
+| `html` | `(ctx) => string` | Email HTML body |
+| `actionUrl` | `(ctx) => string` | Deep link (in-app) |
+| `type` | `string \| (ctx) => string` | Notification type tag |
+| `shouldSend` | `(ctx) => boolean` | Optional guard to skip delivery |
+| `data` | `(ctx) => Record<string,any>` | Arbitrary JSON stored with in-app record |
+
+### Role-based recipients
+
+Recipient arrays support the `roleid:<uuid>` prefix to fan out to all users with a given role:
+
+```typescript
+recipients: async (ctx) => [
+  ctx.actorId,
+  `roleid:${ctx.reviewerRoleId}`,  // expands to all users with this role
+],
+```
+
+The engine resolves these by querying `user_roles` using the admin client before building the effect list.
+
+### Emitting an event
+
+```typescript
+import { emitEvent } from "@/lib/notifications/engine";
+
+await emitEvent("obra.completed", {
+  tenantId: obra.tenant_id,
+  actorId:  user.id,
+  obra:     { id: obra.id, name: obra.name },
+});
+```
+
+If a Vercel Workflow is available, `emitEvent` serializes all expanded effects and starts `deliverEffectsWorkflow`. Each effect's `when` time becomes a `sleep()` call in the workflow. The function returns `{ runId }` so callers can store the ID for cancellation.
+
+### Helper functions
+
+For simple one-off notifications without defining a rule:
+
+```typescript
+import { notifyInApp, notifyInAppForRole } from "@/lib/notifications/api";
+
+// Single user
+await notifyInApp({
+  tenantId: "<uuid>",
+  userId:   "<uuid>",
+  title:    "Documento aprobado",
+  body:     "El contrato fue aprobado por el revisor.",
+  type:     "success",
+  actionUrl: `/excel/${obraId}`,
+});
+
+// All users with a role
+await notifyInAppForRole({
+  tenantId: "<uuid>",
+  roleId:   "<uuid>",
+  title:    "Nueva obra asignada",
+  type:     "info",
+});
+```
+
+These are backed by the `custom.in_app` and `custom.in_app.role` rules registered in `lib/notifications/api.ts`.
+
+## Email notifications
+
+Emails are sent via [Resend](https://resend.com). Two helper functions wrap the Resend API inside Vercel Workflow steps:
+
+```typescript
+// lib/workflow/email.ts
+
+// Generic single email
+export async function sendSimpleEmailEdge(payload: {
+  to: string;
+  subject: string;
+  html: string;
+})
+
+// Obra completion emails (uses the obra-completion template)
+export async function sendObraCompletionEmailEdge(
+  options: ObraEmailTemplateInput
+)
+```
+
+Both functions use `workflowFetch` (the workflow-aware `fetch` primitive) so the HTTP call is a durable workflow step and will retry on transient failures.
+
+### Obra completion email template
+
+The `emails/obra-completion.tsx` template renders a completion summary for one or more obras:
+
+```typescript
+interface ObraCompletionEmailProps {
+  recipientName?: string | null;
+  obras: { name: string; percentage: number }[];
+  introMessage?: string;
+}
+```
+
+The default intro message is `"Te informamos que las siguientes obras alcanzaron el 100% de avance:"`.
+
+### Required environment variables
+
+| Variable | Description |
+|---|---|
+| `RESEND_API_KEY` | Resend API key |
+| `RESEND_FROM_EMAIL` | Sender address (e.g. `noreply@yourdomain.com`) |
+
+## Document reminders
+
+The `/api/doc-reminders` endpoint creates a scheduled notification for a pending document that fires the day before the due date at 09:00.
+
+### Request
+
+```bash
+POST /api/doc-reminders
+Content-Type: application/json
+
+{
+  "obraId":       "<uuid>",
+  "obraName":     "Construcción de 20 viviendas",
+  "documentName": "Certificado de avance mensual",
+  "dueDate":      "2026-04-15",
+  "notifyUserId": "<uuid>",
+  "pendienteId":  "<uuid>"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `obraId` | Yes | The obra the document belongs to |
+| `documentName` | Yes | Display name shown in the notification |
+| `dueDate` | Yes | ISO date string (YYYY-MM-DD) |
+| `notifyUserId` | No | User to receive the reminder; defaults to the authenticated user |
+| `pendienteId` | No | Links the notification to an `obra_pendientes` record |
+
+### What happens
+
+<Steps>
+  <Step title="Immediate confirmation">
+    An in-app notification with `type: "reminder"` and `data.stage: "created"` is inserted immediately so the user receives a toast confirming the reminder was scheduled.
+  </Step>
+  <Step title="Scheduled delivery">
+    A `document.reminder.requested` event is emitted. The engine resolves the `when` callback to the day before `dueDate` at 09:00 local time and starts a Vercel Workflow that sleeps until that moment.
+  </Step>
+  <Step title="Reminder fires">
+    At 09:00 the day before the document is due, an in-app notification is delivered with `data.stage: "due_1d"` and a deep link to the obra.
+  </Step>
+</Steps>
+
+The reminder rule in `lib/notifications/rules.ts`:
+
+```typescript
+defineRule("document.reminder.requested", {
+  recipients: async (ctx) => {
+    return ctx.notifyUserId ? [ctx.notifyUserId] : [];
+  },
+  effects: [
+    {
+      channel: "in-app",
+      when: (ctx) => {
+        const due = parseLocalDate(ctx.dueDate ?? null);
+        if (!due) return null;
+        const dayBefore = new Date(due.getTime() - 24 * 60 * 60 * 1000);
+        dayBefore.setHours(9, 0, 0, 0);
+        return dayBefore;
+      },
+      title: (ctx) => `Recordatorio: ${ctx.documentName} pendiente`,
+      body: (ctx) => `Vence el documento de "${ctx.obraName}" el ${ctx.dueDate}.`,
+      actionUrl: (ctx) => ctx.obraId ? `/excel/${ctx.obraId}` : null,
+      type: "reminder",
+    },
+  ],
+});
+```
+
+## Notifications page
+
+The `/notifications` page (`app/notifications/page.tsx`) provides a full overview of the authenticated user's notification activity:
+
+<CardGroup cols={2}>
+  <Card title="Pending documents calendar" icon="calendar">
+    Document reminders are converted to calendar events and displayed on a full-calendar view. Events are colour-coded: overdue in red, due today in amber, upcoming in green, no-date in violet.
+  </Card>
+  <Card title="Metrics panel" icon="chart-bar">
+    Four at-a-glance metrics: pending count, completed count, overdue count, and upcoming events in the next 7 days, each with a week-over-week delta badge.
+  </Card>
+</CardGroup>
+
+### Mark as read
+
+Users can mark individual notifications or all notifications as read:
+
+```sql
+UPDATE notifications
+SET read_at = NOW()
+WHERE user_id = auth.uid()
+AND tenant_id = <tenant_id>
+AND read_at IS NULL;
+```
+
+### Calendar event types
+
+| Source | ID prefix | Editable? |
+|---|---|---|
+| Flujo actions | `flujo-<action-uuid>` | Yes — updating reschedules the workflow |
+| Document reminders | `<pendiente-id>` | No |
+| Manual calendar events | `<event-uuid>` | Yes |
+
+When a flujo calendar event is updated via the calendar UI, the `obra_flujo_actions` record is updated with the new `scheduled_date` and `timing_mode: "scheduled"`. The rescheduling logic in `PUT /api/flujo-actions` then cancels any running workflow and starts a new one.
+
+## WhatsApp integration
+
+Sintesis accepts inbound WhatsApp messages to upload images to obra folders via the **WhatsApp Business API** (Meta Graph API v22.0).
+
+### Webhook endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/whatsapp/webhook` | Meta webhook verification challenge |
+| `POST` | `/api/whatsapp/webhook` | Receive inbound messages |
+
+### Verification handshake
+
+Meta sends a `GET` request with `hub.mode`, `hub.verify_token`, and `hub.challenge`. The endpoint checks `hub.verify_token` against `WHATSAPP_VERIFY_TOKEN` and echoes back the challenge:
+
+```typescript
+if (mode === "subscribe" && token === VERIFY_TOKEN) {
+  return new NextResponse(challenge ?? "", { status: 200 });
+}
+```
+
+### Uploading images via WhatsApp
+
+Users send an **image** message with a caption describing the target obra and folder:
+
+```
+Photo (image attachment)
+Caption: obra CONSTRUCCION DE 20 VIVIENDAS carpeta Planos
+```
+
+The webhook handler:
+
+<Steps>
+  <Step title="Parse instruction">
+    Extracts `obraName` (or `obraNumber`) and `folderName` from the caption. The keyword `obra` precedes the obra identifier and `carpeta` precedes the folder name.
+  </Step>
+  <Step title="Resolve obra">
+    Looks up the obra by name (case-insensitive `ILIKE` search) or by numeric ID. If multiple obras match the name, the first result (ordered by obra number) is used.
+  </Step>
+  <Step title="Download media">
+    Fetches the media URL from the Meta Graph API using the message's `image.id`, then downloads the binary.
+  </Step>
+  <Step title="Upload to Supabase Storage">
+    Uploads the file to the `obra-documents` bucket at path `{obraId}/{folderName}/{timestamp}-{mediaId}.{ext}`.
+  </Step>
+  <Step title="Reply to sender">
+    Sends a WhatsApp text reply confirming success, with links to the obra page and a signed URL for the uploaded file (valid 24 hours).
+  </Step>
+</Steps>
+
+### Supported image types
+
+| MIME type | Extension |
+|---|---|
+| `image/jpeg` | `.jpg` |
+| `image/png` | `.png` |
+| `image/webp` | `.webp` |
+| `image/heic` | `.heic` |
+| `image/heif` | `.heif` |
+
+### Example caption formats
+
+```
+obra NOMBRE DE OBRA carpeta Planos
+obra 42 carpeta Fotos
+NOMBRE DE OBRA carpeta whatsapp
+```
+
+<Note>
+Text-only WhatsApp messages receive an automated reply prompting the user to send an image with the correct caption format.
+</Note>
+
+### Environment variables
+
+| Variable | Description |
+|---|---|
+| `WHATSAPP_VERIFY_TOKEN` | Secret token for Meta webhook verification |
+| `WHATSAPP_ACCESS_TOKEN` | Meta access token for sending/receiving messages |
+| `WHATSAPP_PHONE_NUMBER_ID` | The Meta phone number ID for the WhatsApp Business account |
+
+## Emitting a notification event from server code
+
+The canonical way to send a notification from any server action or API route:
+
+```typescript
+import { emitEvent } from "@/lib/notifications/engine";
+import "@/lib/notifications/rules"; // ensure rules are registered
+
+await emitEvent("obra.completed", {
+  tenantId: obra.tenant_id,
+  actorId:  user.id,
+  obra:     { id: obra.id, name: obra.name },
+  followUpAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+});
+```
+
+Or via the HTTP endpoint (used by Supabase triggers and Edge Functions):
+
+```bash
+POST /api/notifications/emit
+Content-Type: application/json
+X-Signature: <hmac-sha256-signature>  # required unless REQUEST_SIGNING_DISABLED=1
+
+{
+  "type": "obra.completed",
+  "ctx": {
+    "tenantId": "<uuid>",
+    "actorId": "<uuid>",
+    "obra": { "id": "<uuid>", "name": "Mi Obra" }
+  }
+}
+```
+
+<Warning>
+The `/api/notifications/emit` endpoint validates an HMAC-SHA256 request signature by default. Set `REQUEST_SIGNING_DISABLED=1` only in development environments.
+</Warning>
+
+## Built-in event types
+
+| Event type | Trigger | Channels |
+|---|---|---|
+| `obra.completed` | Obra reaches 100% | in-app (now), email (2 min delay) |
+| `document.reminder.requested` | User creates a doc reminder | in-app (day before due at 09:00) |
+| `flujo.action.triggered` | Flujo action fires | in-app and/or email (at `executeAt`) |
+| `custom.in_app` | `notifyInApp()` helper | in-app (immediate or scheduled) |
+| `custom.in_app.role` | `notifyInAppForRole()` helper | in-app for all users with role |

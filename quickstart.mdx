@@ -1,80 +1,164 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get your first obra created and documents uploaded in Sintesis."
 ---
 
-## Get started in three steps
+Sintesis is invite-only. Before you can log in, your organization needs to be granted access. This guide walks you through the full flow — from requesting access to viewing your obras dashboard.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  Sintesis is a closed-access platform. You cannot self-register. Access is granted after an administrator approves your organization and sends you an invitation.
+</Note>
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Request access">
+    Visit the Sintesis landing page and click **Agendar demo** in the top navigation bar, or scroll to the **¿Listo para digitalizar tus obras?** section and click **Empezá hoy**.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    A contact form will open. Fill in the following required fields:
 
-### Step 2: Deploy your changes
+    | Field | Description |
+    |-------|-------------|
+    | **Nombre** | Your full name |
+    | **Email** | Your work email address |
+    | **Empresa** | Your construction company name |
+    | **Teléfono** | Your phone number (e.g. `+54 9 ...`) |
+    | **Mensaje** | A brief description of your company's needs and how many obras you manage |
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    Click **Enviar información**. The Sintesis team will contact you to schedule a demo and provision your tenant.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    <Tip>
+      In the message field, mention the number of active obras your company manages and whether you have existing Excel or CSV data to import. This helps the team configure your tenant correctly from the start.
+    </Tip>
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Accept your invitation">
+    Once your tenant is provisioned, the Sintesis team or an organization admin will send you an invitation by email.
 
-### Step 3: Go live
+    1. Open the invitation email and click the acceptance link.
+    2. If you do not already have an account, you will be prompted to create one using your email address.
+    3. After authenticating, you are redirected to `/onboarding`.
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    <Note>
+      Invitation links expire. If your link has expired, ask your organization administrator to resend the invitation from the admin panel.
+    </Note>
+  </Step>
+
+  <Step title="Complete onboarding">
+    The onboarding screen at `/onboarding` presents two options:
+
+    <Tabs>
+      <Tab title="Joining an existing organization">
+        If you received an invitation from an administrator, the **Invitaciones Pendientes** section shows the invitation card with:
+
+        - The organization name
+        - The name of the person who invited you
+        - Your assigned role
+        - The time remaining before the invitation expires
+
+        Click **Aceptar** on the invitation card. You will be redirected to your organization's workspace automatically.
+      </Tab>
+      <Tab title="Creating a new organization">
+        If your company is the first to be set up and no invitation exists yet, click **Crear Organización**.
+
+        Enter your organization name in the **Nombre de la Organización** field (minimum 3 characters). For example: `Constructora Acme` or `Ingeniería Regional SA`.
+
+        Click **Crear Organización**. Sintesis creates an isolated tenant for your company and redirects you to the dashboard.
+
+        <Tip>
+          Choose an organization name that clearly identifies your company. This name appears throughout the platform and in reports.
+        </Tip>
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Create your first obra">
+    After onboarding you land on the **Panel de obras** at `/excel`. This is your central obras dashboard.
+
+    To create your first obra manually:
+
+    1. Click **Nueva obra** in the top-right area of the panel header.
+    2. A dialog opens. Fill in the obra details:
+
+       | Field | Description |
+       |-------|-------------|
+       | **Designación y ubicación** | The name and location of the construction project (e.g. `Centro de salud - Etapa I`) |
+       | **Entidad contratante** | The contracting entity or client (e.g. `Municipalidad`, `Ministerio de Salud`) |
+       | **Mes básico de contrato** | The contract base month (e.g. `Enero 2025`) |
+       | **Fecha de iniciación** | The project start date (e.g. `Marzo 2025`) |
+
+    3. Click **Crear obra**. The new obra appears at the top of the table with an initial progress of 0%.
+
+    <Tip>
+      If you already manage obras in a spreadsheet, use **Importar CSV** to bulk-load your project list instead of creating obras one by one. See the next step.
+    </Tip>
+
+    ### Importing obras from CSV (optional)
+
+    If you have an existing list of obras in a CSV or Excel export:
+
+    1. Click **Importar CSV** in the toolbar.
+    2. Select your `.csv` file. Sintesis accepts semicolon-delimited CSV files and handles both UTF-8 and Windows-1252 encodings automatically.
+    3. A preview panel slides in from the right showing the first rows parsed from your file, along with the total number of obras to be imported.
+    4. Review the preview. Required columns are: `Designación y ubicación`, `Entidad contratante`, `Mes básico de contrato`, and `Fecha de iniciación`. Rows missing any of these fields are skipped.
+    5. Click **Confirmar importación**.
+
+    <Note>
+      Imported obras are assigned consecutive numbers starting after the highest existing obra number in your tenant. The system shows a notification confirming the starting number.
+    </Note>
+  </Step>
+
+  <Step title="Upload documents to your obra">
+    Click on any obra row in the dashboard to open the obra detail page at `/excel/[obraId]`.
+
+    The obra detail page has several tabs. Navigate to the **Documentos** tab to access the file manager.
+
+    To upload documents:
+
+    1. In the file tree sidebar on the left, select the folder where you want to store the document (e.g. `Certificados`, `Documentacion`, `Planos`).
+    2. Click **Subir** (Upload) or drag and drop files directly onto the folder area.
+    3. Sintesis uploads the file to the secure `obra-documents` storage bucket scoped to your obra.
+    4. Once uploaded, the document appears in the file list. You can click it to preview it inline.
+
+    <Note>
+      Documents are organized per obra in a folder tree. Folders like `Certificados/Certificados Extraídos` are OCR-enabled — documents uploaded there are automatically processed for structured data extraction.
+    </Note>
+
+    <Tip>
+      Create a consistent folder structure from the start. Sintesis can be configured with default folder templates per tenant so new obras always start with the same directory layout.
+    </Tip>
+  </Step>
+
+  <Step title="View the obras dashboard">
+    Return to `/excel` to see your full obras dashboard.
+
+    From the **Panel de obras** you can:
+
+    - **Search and filter** obras using the search bar and tab filters (**Todas**, **Activas**, **Completadas**)
+    - **Sort columns** by clicking any column header
+    - **Edit fields inline** directly in the table cells
+    - **Track progress** via the visual progress bar in the **Avance %** column
+    - **Generate a report** by clicking **Generar Reporte** to produce a consolidated PDF across your obra portfolio
+
+    On mobile, the dashboard shows a card-based list view. Tap any obra card to open its detail page.
+
+    <Tip>
+      Use the tab filters to focus on active obras during daily operations, and switch to **Todas** when you need to find a historical project.
+    </Tip>
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Obra management" icon="building" href="/features/obras">
+    Learn how to edit obra data, track budget execution, and manage certificates.
+  </Card>
+  <Card title="Document centralization" icon="folder-open" href="/features/documents">
+    Organize documents by folder, enable OCR extraction, and share files with your team.
+  </Card>
+  <Card title="AI data extraction" icon="bolt" href="/automation/ocr-extraction">
+    Configure OCR templates to automatically extract structured data from uploaded documents.
+  </Card>
+  <Card title="Reports and alerts" icon="chart-bar" href="/features/reports">
+    Set up financial deviation alerts and generate progress reports across your portfolio.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

@@ -1,0 +1,295 @@
+---
+title: "Environment variables"
+description: "Complete reference for every environment variable used by Sintesis, grouped by service, with instructions on how to obtain each value."
+---
+
+Sintesis uses a `.env.local` file for local development. Copy the example file to get started:
+
+```bash
+cp env.example .env.local
+```
+
+<Warning>
+Never commit `.env.local` to version control. It is already listed in `.gitignore`. Do not expose `SUPABASE_SERVICE_ROLE_KEY` or any other server-only secret to the browser.
+</Warning>
+
+## Supabase
+
+These variables connect the app to your Supabase project. The `NEXT_PUBLIC_` prefixed variables are safe to expose to the browser; the service role keys must remain server-only.
+
+<ParamField path="NEXT_PUBLIC_SUPABASE_URL" type="string" required>
+  The base URL of your Supabase project. For local development this is `http://localhost:54321`. For production, find it in your Supabase dashboard under **Project Settings → API → Project URL**.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_SUPABASE_ANON_KEY" type="string" required>
+  The anonymous (public) JWT for your Supabase project. Safe to expose to the browser — Row Level Security enforces data access. Find it in **Project Settings → API → Project API Keys → `anon public`**.
+</ParamField>
+
+<ParamField path="SUPABASE_SERVICE_ROLE_KEY" type="string">
+  The service role JWT that bypasses RLS. Used only in server-side routes and background jobs. Never expose this to the browser. Find it in **Project Settings → API → Project API Keys → `service_role secret`**.
+</ParamField>
+
+<ParamField path="SUPABASE_SERVICE_ROLE_KEY_V1" type="string">
+  Previous version of the service role key, retained for rolling-key rotation. Leave blank unless actively rotating keys.
+</ParamField>
+
+<ParamField path="SUPABASE_SERVICE_ROLE_KEY_V2" type="string">
+  Current version of the service role key used during key rotation. Leave blank unless actively rotating keys.
+</ParamField>
+
+<ParamField path="SUPABASE_SERVICE_ROLE_KEY_VERSION" type="string">
+  Indicates which version slot (`v1` or `v2`) is currently active during key rotation. Leave blank unless using the rotation mechanism.
+</ParamField>
+
+<Tip>
+For local development the `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` values in `env.example` are pre-filled with the default local Supabase stack values — no changes needed unless you customise your local ports.
+</Tip>
+
+## Google OAuth
+
+Required only if you enable Google sign-in. Configured in `supabase/config.toml` under `[auth.external.google]`.
+
+<ParamField path="GOOGLE_CLIENT_ID" type="string">
+  OAuth 2.0 client ID from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Create an **OAuth client ID** of type **Web application** and copy the client ID.
+</ParamField>
+
+<ParamField path="GOOGLE_CLIENT_SECRET" type="string">
+  OAuth 2.0 client secret from the same Google Cloud credential entry. Keep this server-side only.
+</ParamField>
+
+<Note>
+For local development, add `http://127.0.0.1:54321/auth/v1/callback` as an authorised redirect URI in your Google Cloud OAuth credential.
+</Note>
+
+## Email — Resend
+
+Sintesis sends transactional email (invitations, notifications) via [Resend](https://resend.com).
+
+<ParamField path="RESEND_API_KEY" type="string">
+  Your Resend API key. Create one in the Resend dashboard under **API Keys**. The key starts with `re_`.
+</ParamField>
+
+<ParamField path="RESEND_FROM_EMAIL" type="string">
+  The verified sender address used in outgoing emails, e.g. `no-reply@yourdomain.com`. The domain must be verified in your Resend account.
+</ParamField>
+
+<ParamField path="RESEND_API_KEY_V1" type="string">
+  Previous Resend API key slot for rolling-key rotation.
+</ParamField>
+
+<ParamField path="RESEND_API_KEY_V2" type="string">
+  Current Resend API key slot during rotation.
+</ParamField>
+
+<ParamField path="RESEND_API_KEY_VERSION" type="string">
+  Active version slot (`v1` or `v2`) during key rotation.
+</ParamField>
+
+## AI providers
+
+<ParamField path="OPENAI_API_KEY" type="string">
+  OpenAI API key used for AI-assisted features such as OCR post-processing and document analysis. Create one in the [OpenAI Platform](https://platform.openai.com/api-keys) under **API Keys**. The key starts with `sk-`.
+</ParamField>
+
+<ParamField path="OPENAI_API_KEY_V1" type="string">
+  Previous OpenAI key slot for rolling-key rotation.
+</ParamField>
+
+<ParamField path="OPENAI_API_KEY_V2" type="string">
+  Current OpenAI key slot during rotation.
+</ParamField>
+
+<ParamField path="OPENAI_API_KEY_VERSION" type="string">
+  Active version slot (`v1` or `v2`) during rotation.
+</ParamField>
+
+<Note>
+Sintesis also supports Google AI via `@ai-sdk/google`. No separate environment variable is listed in `env.example`; if you add Google AI features, add `GOOGLE_GENERATIVE_AI_API_KEY` following the same pattern.
+</Note>
+
+## WhatsApp Cloud API
+
+All WhatsApp variables are server-only. Never expose them to the browser.
+
+<ParamField path="WHATSAPP_ACCESS_TOKEN" type="string">
+  Permanent or temporary access token for the WhatsApp Cloud API. Generate one in the [Meta for Developers](https://developers.facebook.com) portal under your app's **WhatsApp → API Setup** section.
+</ParamField>
+
+<ParamField path="WHATSAPP_PHONE_NUMBER_ID" type="string">
+  Numeric ID of the phone number you registered with the WhatsApp Cloud API. Found in **Meta for Developers → WhatsApp → API Setup → Phone number ID**.
+</ParamField>
+
+<ParamField path="WHATSAPP_VERIFY_TOKEN" type="string">
+  A string you define and provide to Meta when setting up the webhook. Sintesis uses it to verify incoming webhook requests from Meta.
+</ParamField>
+
+## Upstash Redis — rate limiting
+
+Sintesis uses [Upstash Redis](https://upstash.com) to enforce per-IP and per-tenant rate limits on API routes.
+
+<ParamField path="UPSTASH_REDIS_REST_URL" type="string">
+  REST endpoint of your Upstash Redis database. Found in the Upstash console under **Databases → your database → REST API**.
+</ParamField>
+
+<ParamField path="UPSTASH_REDIS_REST_TOKEN" type="string">
+  Authentication token for the Upstash Redis REST API. Found alongside the REST URL in the Upstash console.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_IP" type="number" default="120">
+  Maximum number of requests allowed per IP address within the configured window. Defaults to `120`.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_IP_WINDOW" type="string" default="1m">
+  Time window for the per-IP rate limit. Uses Upstash duration syntax, e.g. `1m`, `30s`, `5m`.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_TENANT" type="number" default="2000">
+  Maximum number of requests allowed per tenant within the configured window. Defaults to `2000`.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_TENANT_WINDOW" type="string" default="5m">
+  Time window for the per-tenant rate limit. Defaults to `5m`.
+</ParamField>
+
+## Domain split
+
+Sintesis supports an optional configuration where the marketing site lives on the root domain and the application lives on an `app.` subdomain.
+
+<ParamField path="ENABLE_DOMAIN_SPLIT" type="boolean" default="false">
+  Set to `true` to activate domain-split routing. When enabled, Next.js middleware redirects users between the marketing and app domains based on the route.
+</ParamField>
+
+<ParamField path="APP_HOST" type="string" default="app.yourdomain.com">
+  The hostname for the application subdomain. Used in server-side redirect logic.
+</ParamField>
+
+<ParamField path="MARKETING_HOST" type="string" default="yourdomain.com">
+  The hostname for the marketing/root domain. Used in server-side redirect logic.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_ENABLE_DOMAIN_SPLIT" type="boolean" default="false">
+  Client-side equivalent of `ENABLE_DOMAIN_SPLIT`. Must match the server-side value.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_APP_HOST" type="string">
+  Client-side equivalent of `APP_HOST`. Used in client components that build cross-domain links.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_MARKETING_HOST" type="string">
+  Client-side equivalent of `MARKETING_HOST`.
+</ParamField>
+
+## Request signing
+
+<ParamField path="REQUEST_SIGNING_DISABLED" type="number" default="0">
+  Set to `1` to disable HMAC request signing for internal API calls. Useful during local development if you do not have a signing key configured. Leave at `0` in production.
+</ParamField>
+
+<ParamField path="REQUEST_SIGNATURE_MAX_AGE_MS" type="number" default="300000">
+  Maximum age in milliseconds for a signed request before it is rejected as a replay. Defaults to `300000` (5 minutes).
+</ParamField>
+
+## Monitoring — Sentry
+
+Error tracking and performance monitoring via [Sentry](https://sentry.io). Sentry is only active on Vercel production builds (`VERCEL_ENV=production`).
+
+<ParamField path="SENTRY_DSN" type="string">
+  The Data Source Name for your Sentry project. Found in **Sentry → Settings → Projects → your project → Client Keys (DSN)**.
+</ParamField>
+
+<ParamField path="SENTRY_ENVIRONMENT" type="string" default="development">
+  The environment name reported to Sentry (e.g. `development`, `staging`, `production`).
+</ParamField>
+
+<ParamField path="SENTRY_TRACES_SAMPLE_RATE" type="number" default="0.1">
+  Fraction of transactions to send to Sentry for performance monitoring (0–1). Keep low in production to control costs.
+</ParamField>
+
+<ParamField path="SENTRY_PROFILES_SAMPLE_RATE" type="number" default="0.1">
+  Fraction of sampled transactions that also capture a performance profile.
+</ParamField>
+
+<ParamField path="SENTRY_REPLAYS_ERROR_SAMPLE_RATE" type="number" default="1">
+  Fraction of sessions where an error occurred for which a Session Replay is captured. Defaults to `1` (capture all error sessions).
+</ParamField>
+
+<ParamField path="SENTRY_REPLAYS_SESSION_SAMPLE_RATE" type="number" default="0">
+  Fraction of all sessions to capture as Session Replays. Defaults to `0` to avoid storage costs in development.
+</ParamField>
+
+<ParamField path="SENTRY_ORG" type="string">
+  Your Sentry organisation slug. Used by the Sentry webpack plugin to upload source maps during production builds. Found in **Sentry → Settings → General Settings → Organization slug**.
+</ParamField>
+
+<ParamField path="SENTRY_PROJECT" type="string">
+  Your Sentry project slug. Used by the webpack plugin alongside `SENTRY_ORG`.
+</ParamField>
+
+## Health checks and cron
+
+<ParamField path="HEALTHCHECK_TOKEN" type="string">
+  A secret token that uptime monitoring services must include in the `Authorization` header when calling the health-check endpoint. Generate a random string, e.g. `openssl rand -hex 32`.
+</ParamField>
+
+<ParamField path="CRON_SECRET" type="string">
+  A secret used to authenticate requests to cron-triggered API routes (schedule runners, orphan cleanup jobs). Vercel Cron sends this automatically when you configure it in `vercel.json`. Generate with `openssl rand -hex 32`.
+</ParamField>
+
+## Complete `.env.local` template
+
+```env
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+
+# Google OAuth (optional)
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Email — Resend
+RESEND_API_KEY=re_xxxxxxxxxxxx
+RESEND_FROM_EMAIL=no-reply@yourdomain.com
+
+# AI
+OPENAI_API_KEY=sk-xxxxxxxxxxxx
+
+# WhatsApp Cloud API (server-only)
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_VERIFY_TOKEN=
+
+# Upstash Redis
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+RATE_LIMIT_IP=120
+RATE_LIMIT_IP_WINDOW=1m
+RATE_LIMIT_TENANT=2000
+RATE_LIMIT_TENANT_WINDOW=5m
+
+# Domain split (leave false for local dev)
+ENABLE_DOMAIN_SPLIT=false
+NEXT_PUBLIC_ENABLE_DOMAIN_SPLIT=false
+APP_HOST=app.yourdomain.com
+MARKETING_HOST=yourdomain.com
+NEXT_PUBLIC_APP_HOST=app.yourdomain.com
+NEXT_PUBLIC_MARKETING_HOST=yourdomain.com
+
+# Request signing
+REQUEST_SIGNING_DISABLED=1
+REQUEST_SIGNATURE_MAX_AGE_MS=300000
+
+# Sentry
+SENTRY_DSN=
+SENTRY_ENVIRONMENT=development
+SENTRY_TRACES_SAMPLE_RATE=0.1
+SENTRY_PROFILES_SAMPLE_RATE=0.1
+SENTRY_REPLAYS_ERROR_SAMPLE_RATE=1
+SENTRY_REPLAYS_SESSION_SAMPLE_RATE=0
+SENTRY_ORG=
+SENTRY_PROJECT=
+
+# Health check / cron
+HEALTHCHECK_TOKEN=
+CRON_SECRET=
+```

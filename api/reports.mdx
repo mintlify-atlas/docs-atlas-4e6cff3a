@@ -1,0 +1,295 @@
+---
+title: "Reports"
+description: "Endpoints for managing report presets, templates, and shareable report links."
+---
+
+The reports system allows users to save filter configurations as presets, create reusable templates, and generate public share links for reports.
+
+---
+
+## Report presets
+
+Presets store named filter and state snapshots for a specific report. They are scoped to the tenant and associated with the user who created them.
+
+### List presets
+
+<ParamField path="GET /api/reports/presets" type="string" />
+
+Returns all presets for the authenticated user's active tenant, filtered by report key.
+
+#### Query parameters
+
+<ParamField query="reportKey" type="string" required>
+  Identifier for the report type (e.g. `obras`, `certificados`).
+</ParamField>
+
+#### Response
+
+<ResponseField name="presets" type="ReportPreset[]" required>
+  Array of preset objects ordered by `updated_at` descending.
+  <Expandable title="ReportPreset properties">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="tenant_id" type="string">Tenant UUID.</ResponseField>
+    <ResponseField name="owner_user_id" type="string">UUID of the user who created the preset.</ResponseField>
+    <ResponseField name="report_key" type="string">Report type identifier.</ResponseField>
+    <ResponseField name="name" type="string">Display name.</ResponseField>
+    <ResponseField name="filters" type="object">Saved filter configuration.</ResponseField>
+    <ResponseField name="report_state" type="object">Saved report UI state.</ResponseField>
+    <ResponseField name="updated_at" type="string">ISO 8601 timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/reports/presets?reportKey=obras' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "presets": [
+        {
+          "id": "preset-uuid-...",
+          "tenant_id": "tenant-uuid-...",
+          "owner_user_id": "user-uuid-...",
+          "report_key": "obras",
+          "name": "Obras en curso — MUNICIPIO",
+          "filters": { "status": "in-process", "entidad": ["MUNICIPIO"] },
+          "report_state": { "columns": ["n", "designacion", "porcentaje"] },
+          "updated_at": "2024-06-01T12:00:00Z"
+        }
+      ]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### Create a preset
+
+<ParamField path="POST /api/reports/presets" type="string" />
+
+Creates a new saved preset for the authenticated user.
+
+#### Request body
+
+<ParamField body="reportKey" type="string" required>Report type identifier.</ParamField>
+<ParamField body="name" type="string" required>Display name for the preset.</ParamField>
+<ParamField body="filters" type="object">Filter configuration to save. Defaults to `{}`.</ParamField>
+<ParamField body="reportState" type="object">Report UI state to save. Defaults to `{}`.</ParamField>
+
+#### Response
+
+<ResponseField name="preset" type="ReportPreset" required>The newly created preset.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X POST 'https://<domain>/api/reports/presets' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "reportKey": "obras",
+        "name": "Obras en curso — MUNICIPIO",
+        "filters": { "status": "in-process", "entidad": ["MUNICIPIO"] },
+        "reportState": {}
+      }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "preset": {
+        "id": "preset-uuid-...",
+        "report_key": "obras",
+        "name": "Obras en curso — MUNICIPIO",
+        "filters": { "status": "in-process", "entidad": ["MUNICIPIO"] },
+        "report_state": {}
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### Delete a preset
+
+<ParamField path="DELETE /api/reports/presets" type="string" />
+
+Deletes a preset by ID. The preset must belong to the authenticated user's active tenant.
+
+#### Query parameters
+
+<ParamField query="id" type="string" required>UUID of the preset to delete.</ParamField>
+
+#### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+
+---
+
+## Report templates
+
+Templates are reusable report configurations. Unlike presets (which are personal), templates belong to the tenant.
+
+### List templates
+
+<ParamField path="GET /api/reports/templates" type="string" />
+
+Returns all templates for the authenticated user's active tenant, filtered by report key.
+
+#### Query parameters
+
+<ParamField query="reportKey" type="string" required>Report type identifier.</ParamField>
+
+#### Response
+
+<ResponseField name="templates" type="ReportTemplate[]" required>
+  Array of template objects ordered by `updated_at` descending.
+  <Expandable title="ReportTemplate properties">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="tenant_id" type="string">Tenant UUID.</ResponseField>
+    <ResponseField name="report_key" type="string">Report type identifier.</ResponseField>
+    <ResponseField name="name" type="string">Display name.</ResponseField>
+    <ResponseField name="description" type="string | null">Optional description.</ResponseField>
+    <ResponseField name="payload" type="object">Template configuration payload.</ResponseField>
+    <ResponseField name="is_system" type="boolean">Whether this is a system-managed template.</ResponseField>
+    <ResponseField name="updated_at" type="string">ISO 8601 timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### Create a template
+
+<ParamField path="POST /api/reports/templates" type="string" />
+
+Creates a new report template for the tenant.
+
+#### Request body
+
+<ParamField body="reportKey" type="string" required>Report type identifier.</ParamField>
+<ParamField body="name" type="string" required>Display name.</ParamField>
+<ParamField body="description" type="string">Optional description.</ParamField>
+<ParamField body="payload" type="object">Template configuration. Defaults to `{}`.</ParamField>
+<ParamField body="isSystem" type="boolean">Mark as a system template. Defaults to `false`.</ParamField>
+
+#### Response
+
+<ResponseField name="template" type="ReportTemplate" required>The newly created template.</ResponseField>
+
+---
+
+### Delete a template
+
+<ParamField path="DELETE /api/reports/templates" type="string" />
+
+Deletes a template by ID.
+
+#### Query parameters
+
+<ParamField query="id" type="string" required>UUID of the template to delete.</ParamField>
+
+#### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+
+---
+
+## Share links
+
+Share links let authenticated users create token-based public URLs for a specific report state. The token can be used without authentication to retrieve the report payload.
+
+### Create a share link
+
+<ParamField path="POST /api/reports/share" type="string" />
+
+Creates a share link for a report. Returns the share record and the relative URL path (`/r/{token}`).
+
+#### Request body
+
+<ParamField body="reportKey" type="string" required>Report type identifier.</ParamField>
+<ParamField body="payload" type="object" required>The report state/data to embed in the share link.</ParamField>
+<ParamField body="presetId" type="string">Optional UUID of an associated preset.</ParamField>
+<ParamField body="expiresAt" type="string">Optional ISO 8601 expiry timestamp. If omitted the link never expires.</ParamField>
+
+#### Response
+
+<ResponseField name="share" type="object" required>The full share link record from the database.</ResponseField>
+<ResponseField name="url" type="string" required>Relative URL path for the share link, e.g. `/r/abc123`.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X POST 'https://<domain>/api/reports/share' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "reportKey": "obras",
+        "payload": { "filters": { "status": "completed" } },
+        "expiresAt": "2025-12-31T23:59:59Z"
+      }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "share": {
+        "id": "share-uuid-...",
+        "tenant_id": "tenant-uuid-...",
+        "report_key": "obras",
+        "token": "abc123def456",
+        "payload": { "filters": { "status": "completed" } },
+        "expires_at": "2025-12-31T23:59:59Z",
+        "created_by": "user-uuid-..."
+      },
+      "url": "/r/abc123def456"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### Resolve a share link
+
+<ParamField path="GET /api/reports/share" type="string" />
+
+Resolves a share link by token. This endpoint does **not** require authentication — it is intended for public consumers of shared reports.
+
+<Warning>
+If the share link has an `expires_at` in the past, the endpoint returns `410 Gone`.
+</Warning>
+
+#### Query parameters
+
+<ParamField query="token" type="string" required>The share token (from the `url` returned when the link was created).</ParamField>
+
+#### Response
+
+<ResponseField name="share" type="object" required>The full share link record, including the embedded `payload`.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/reports/share?token=abc123def456'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "share": {
+        "id": "share-uuid-...",
+        "report_key": "obras",
+        "token": "abc123def456",
+        "payload": { "filters": { "status": "completed" } },
+        "expires_at": "2025-12-31T23:59:59Z"
+      }
+    }
+    ```
+  </Tab>
+</Tabs>

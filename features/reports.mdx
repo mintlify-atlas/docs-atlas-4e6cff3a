@@ -1,0 +1,206 @@
+---
+title: "Reports"
+description: "Automated findings, progress curve visualisation, and filterable report exports for obras and macro tables in Sintesis."
+---
+
+Sintesis includes a reporting engine that analyses obra data and surfaces actionable findings — deviations between planned and actual progress, unpaid certificates, missing monthly certifications, and more. Reports can be filtered, saved as presets, shared via links, and exported.
+
+## Report types
+
+<CardGroup cols={2}>
+  <Card title="Obras report" icon="table-list">
+    A filterable, paginated view of all obras (`/excel/reporte`). Filter by surface area, contracting entity, contract amounts, timeline, and completion percentage.
+  </Card>
+  <Card title="Per-obra findings" icon="triangle-exclamation">
+    Automated rule-based findings shown on the obra general tab. Findings are classified as `info`, `warn`, or `critical`.
+  </Card>
+  <Card title="Progress curve" icon="chart-line">
+    A plan-vs-actual progress chart built from the Curva Plan tabla (planned cumulative %) and the PMC Resumen tabla (actual physical progress %).
+  </Card>
+  <Card title="Macro table report" icon="layer-group">
+    A report view for each macro table at `/macro/[id]/reporte`, applying the same filter and preset system.
+  </Card>
+</CardGroup>
+
+## Obras report
+
+Navigate to **Generar Reporte** from the obras dashboard toolbar, or go directly to `/excel/reporte`.
+
+### Available filters
+
+| Filter | Field | Type |
+|---|---|---|
+| Surface area | `sup_de_obra_m2` | Numeric range |
+| Contracting entity | `entidad_contratante` | Text contains |
+| Base contract month (year) | `mes_basico_de_contrato` | Year / text contains |
+| Start date (year) | `iniciacion` | Year / text contains |
+| Contract + amendments | `contrato_mas_ampliaciones` | Numeric range |
+| Certified to date | `certificado_a_la_fecha` | Numeric range |
+| Balance to certify | `saldo_a_certificar` | Numeric range |
+| Per-contract term | `segun_contrato` | Numeric range |
+| Extensions granted | `prorrogas_acordadas` | Numeric range |
+| Total term | `plazo_total` | Numeric range |
+| Elapsed term | `plazo_transc` | Numeric range |
+| Completion % | `porcentaje` | Numeric range |
+| Status | derived | All / In progress / Completed |
+
+Filters are initialised from URL query parameters, so you can deep-link to a pre-filtered report view.
+
+## Report presets
+
+Report presets let users save and reuse filter and column configurations without rebuilding them each time.
+
+### `report_presets` schema
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key. |
+| `tenant_id` | `uuid` | Owning tenant. |
+| `owner_user_id` | `uuid` | User who created the preset. |
+| `report_key` | `text` | Identifies the report type (e.g. `obras`). |
+| `name` | `text` | Display name (unique per tenant + report key). |
+| `filters` | `jsonb` | Serialised filter state. |
+| `report_state` | `jsonb` | Serialised column visibility, sort, and other UI state. |
+
+### `report_templates` schema
+
+System-level or admin-created templates that pre-populate a report configuration:
+
+| Column | Type | Description |
+|---|---|---|
+| `report_key` | `text` | Report type this template applies to. |
+| `name` | `text` | Template name. |
+| `description` | `text` | Optional description. |
+| `payload` | `jsonb` | Full configuration payload. |
+| `is_system` | `boolean` | Whether this is a system-provided template. |
+
+## Share links
+
+You can generate a shareable link for any report view. Share links encode the filter and state at creation time:
+
+| Column | Type | Description |
+|---|---|---|
+| `token` | `text` | Unique URL token. |
+| `preset_id` | `uuid` | The preset this link is based on (optional). |
+| `payload` | `jsonb` | Snapshot of the report state at link creation. |
+| `expires_at` | `timestamptz` | Optional expiry. `null` means the link never expires. |
+
+<Warning>
+  Share links grant access to the report state snapshot at creation time. Revoke them by deleting the `report_share_links` record if the data they reference becomes sensitive.
+</Warning>
+
+## Automated findings (rule engine)
+
+Sintesis continuously evaluates a set of configurable rules against each obra and stores the results as **signals** and **findings**.
+
+### Finding severity levels
+
+| Severity | Meaning |
+|---|---|
+| `info` | Informational — no action required, but worth noting |
+| `warn` | Warning — potential issue that should be reviewed |
+| `critical` | Critical — requires immediate attention |
+
+### Built-in rule packs
+
+<AccordionGroup>
+  <Accordion title="Curve deviation (curve)">
+    Compares planned cumulative progress (from the Curva Plan tabla) against actual physical progress (from the PMC Resumen tabla) for the current period. Fires a `warn` finding if actual is more than `warnBelow` percentage points behind plan, or `critical` if more than `criticalBelow` points behind.
+
+    Default thresholds: `warnBelow: 10`, `criticalBelow: 20`.
+  </Accordion>
+  <Accordion title="Unpaid certificates (unpaidCerts)">
+    Checks for certificates where `cobrado = false` and `vencimiento` is in the past. Configurable severity (`warn` or `critical`).
+  </Accordion>
+  <Accordion title="Inactivity (inactivity)">
+    Detects obras where no measurement or certificate has been recorded within the configured number of days or months. Useful for identifying stalled projects.
+  </Accordion>
+  <Accordion title="Missing monthly certificate (monthlyMissingCert)">
+    Fires if the current month has no certificate recorded for an obra that is expected to certify monthly.
+  </Accordion>
+  <Accordion title="Stalled stage (stageStalled)">
+    Monitors a stage/location tabla for rows that have been in the same stage for longer than the configured number of weeks.
+  </Accordion>
+</AccordionGroup>
+
+### Rule configuration
+
+Rule packs and their thresholds are configurable per obra via `obra_rule_config`:
+
+```json
+{
+  "enabledPacks": {
+    "curve": true,
+    "unpaidCerts": true,
+    "inactivity": true,
+    "monthlyMissingCert": true,
+    "stageStalled": false
+  },
+  "mappings": {
+    "curve": {
+      "planTableId": "<obra-tabla-uuid>",
+      "resumenTableId": "<obra-tabla-uuid>",
+      "plan": { "startPeriod": "2024-03" }
+    }
+  },
+  "thresholds": {
+    "curve": { "warnBelow": 10, "criticalBelow": 20 },
+    "unpaidCerts": { "severity": "warn" }
+  }
+}
+```
+
+If no custom configuration exists for an obra, Sintesis falls back to the default rule configuration (all packs enabled, default thresholds).
+
+### Reporting tables schema
+
+**`obra_signals`** — computed metric values per obra and period:
+
+| Column | Type | Description |
+|---|---|---|
+| `obra_id` | `uuid` | The obra this signal belongs to. |
+| `period_key` | `text` | Period identifier (e.g. `2024-11`). |
+| `signal_key` | `text` | The metric name (e.g. `curve.actual_pct`). |
+| `value_num` | `numeric` | Numeric signal value. |
+| `value_bool` | `boolean` | Boolean signal value. |
+| `value_json` | `jsonb` | Structured signal value. |
+| `computed_at` | `timestamptz` | When the signal was last computed. |
+
+**`obra_findings`** — rule evaluation results:
+
+| Column | Type | Description |
+|---|---|---|
+| `obra_id` | `uuid` | The obra this finding belongs to. |
+| `period_key` | `text` | The period when this finding was created. |
+| `rule_key` | `text` | Which rule generated this finding. |
+| `severity` | `text` | `info`, `warn`, or `critical`. |
+| `title` | `text` | Short finding title shown in the UI. |
+| `message` | `text` | Detailed explanation of the finding. |
+| `evidence_json` | `jsonb` | Supporting data used to generate the finding. |
+| `status` | `text` | `open` or `resolved`. |
+| `resolved_at` | `timestamptz` | When the finding was marked resolved. |
+
+## Progress curve visualisation
+
+The obra general tab displays a plan-vs-actual progress chart when Sintesis can identify both a Curva Plan tabla and a PMC Resumen tabla for the obra.
+
+### How curve data is sourced
+
+<Steps>
+  <Step title="Identify plan table">
+    Sintesis looks for an obra tabla with columns `periodo`, `avance_mensual_pct`, and `avance_acumulado_pct`. If `obra_rule_config` specifies a `planTableId`, that tabla is used instead.
+  </Step>
+  <Step title="Identify resumen table">
+    Sintesis looks for a tabla with `avance_fisico_acumulado_pct` and a period column. If `obra_rule_config` specifies a `resumenTableId`, that tabla is used.
+  </Step>
+  <Step title="Align periods">
+    Period labels from both tables are normalised to a `YYYY-MM` key. Spanish month names, `Mes N` patterns, and full date strings are all supported. If a `startPeriod` is configured, `Mes 1`, `Mes 2`, ... values are mapped to calendar months from that start.
+  </Step>
+  <Step title="Render the chart">
+    Points where `planPct` and `realPct` exist for the same period are plotted together. The chart shows the deviation between planned and actual cumulative progress.
+  </Step>
+</Steps>
+
+<Tip>
+  If your obra is behind schedule, the `obraDelay` value (time progress % minus physical completion %) is calculated and shown as a risk indicator on the general tab. Obras with a delay greater than 10 percentage points are flagged as **at risk**.
+</Tip>

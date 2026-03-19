@@ -1,0 +1,523 @@
+---
+title: "Obras"
+description: "Endpoints for managing construction projects (obras) and their sub-resources."
+---
+
+Obras are the central entity in Sintesis. Each obra belongs to a tenant and represents a construction contract with financial and scheduling data.
+
+---
+
+## List obras
+
+<ParamField path="GET /api/obras" type="string" />
+
+Returns all obras for the authenticated user's active tenant. Supports pagination, sorting, full-text search, and range filters.
+
+### Query parameters
+
+<ParamField query="page" type="number" default="1">
+  Page number (1-indexed). Enables paginated mode when provided alongside `limit`.
+</ParamField>
+
+<ParamField query="limit" type="number" default="50">
+  Results per page. Clamped between `1` and `500`.
+</ParamField>
+
+<ParamField query="orderBy" type="string" default="n">
+  Column to sort by. Allowed values: `n`, `designacion_y_ubicacion`, `sup_de_obra_m2`, `entidad_contratante`, `mes_basico_de_contrato`, `iniciacion`, `contrato_mas_ampliaciones`, `certificado_a_la_fecha`, `saldo_a_certificar`, `segun_contrato`, `prorrogas_acordadas`, `plazo_total`, `plazo_transc`, `porcentaje`, `updated_at`.
+</ParamField>
+
+<ParamField query="orderDir" type="string" default="asc">
+  Sort direction: `asc` or `desc`.
+</ParamField>
+
+<ParamField query="status" type="string">
+  Filter by completion status. Accepted values: `completed` (porcentaje = 100) or `in-process` (porcentaje < 100).
+</ParamField>
+
+<ParamField query="q" type="string">
+  Full-text search across `designacion_y_ubicacion`, `entidad_contratante`, `mes_basico_de_contrato`, `iniciacion`, and numeric fields.
+</ParamField>
+
+<ParamField query="supMin" type="number">
+  Minimum surface area (m²).
+</ParamField>
+
+<ParamField query="supMax" type="number">
+  Maximum surface area (m²).
+</ParamField>
+
+<ParamField query="porcentajeMin" type="number">
+  Minimum completion percentage.
+</ParamField>
+
+<ParamField query="porcentajeMax" type="number">
+  Maximum completion percentage.
+</ParamField>
+
+<ParamField query="entidad" type="string[]">
+  Filter by one or more contracting entities. Repeat the parameter for multiple values: `?entidad=MUNICIPIO&entidad=PROVINCIA`.
+</ParamField>
+
+<ParamField query="mesYear" type="string">
+  Filter `mes_basico_de_contrato` by year substring.
+</ParamField>
+
+<ParamField query="iniYear" type="string">
+  Filter `iniciacion` by year substring.
+</ParamField>
+
+<Warning>
+Numeric range filters are also available for `contrato_mas_ampliaciones` (`cmaMin`/`cmaMax`), `certificado_a_la_fecha` (`cafMin`/`cafMax`), `saldo_a_certificar` (`sacMin`/`sacMax`), `segun_contrato` (`scMin`/`scMax`), `prorrogas_acordadas` (`paMin`/`paMax`), `plazo_total` (`ptMin`/`ptMax`), and `plazo_transc` (`ptrMin`/`ptrMax`).
+</Warning>
+
+### Response
+
+<ResponseField name="detalleObras" type="Obra[]" required>
+  Array of obra objects.
+  <Expandable title="Obra properties">
+    <ResponseField name="id" type="string" required>UUID of the obra.</ResponseField>
+    <ResponseField name="n" type="number" required>Sequential obra number within the tenant.</ResponseField>
+    <ResponseField name="designacionYUbicacion" type="string" required>Name and location of the project.</ResponseField>
+    <ResponseField name="supDeObraM2" type="number" required>Surface area in square meters.</ResponseField>
+    <ResponseField name="entidadContratante" type="string" required>Contracting entity.</ResponseField>
+    <ResponseField name="mesBasicoDeContrato" type="string" required>Base contract month.</ResponseField>
+    <ResponseField name="iniciacion" type="string" required>Start date string.</ResponseField>
+    <ResponseField name="contratoMasAmpliaciones" type="number" required>Contract value including extensions.</ResponseField>
+    <ResponseField name="certificadoALaFecha" type="number" required>Amount certified to date.</ResponseField>
+    <ResponseField name="saldoACertificar" type="number" required>Remaining amount to certify.</ResponseField>
+    <ResponseField name="segunContrato" type="number" required>Value per original contract.</ResponseField>
+    <ResponseField name="prorrogasAcordadas" type="number" required>Agreed extensions amount.</ResponseField>
+    <ResponseField name="plazoTotal" type="number" required>Total contract term (days).</ResponseField>
+    <ResponseField name="plazoTransc" type="number" required>Elapsed term (days).</ResponseField>
+    <ResponseField name="porcentaje" type="number" required>Completion percentage (0–100).</ResponseField>
+    <ResponseField name="updatedAt" type="string | null">ISO 8601 timestamp of last update.</ResponseField>
+    <ResponseField name="customData" type="object">Key-value map of tenant-defined custom column values.</ResponseField>
+    <ResponseField name="onFinishFirstMessage" type="string | null">Message sent on first completion notification.</ResponseField>
+    <ResponseField name="onFinishSecondMessage" type="string | null">Message sent on follow-up completion notification.</ResponseField>
+    <ResponseField name="onFinishSecondSendAt" type="string | null">ISO 8601 timestamp for the follow-up message.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="pagination" type="object">
+  Present only when `page` or `limit` query params are supplied.
+  <Expandable title="Pagination properties">
+    <ResponseField name="page" type="number">Current page.</ResponseField>
+    <ResponseField name="limit" type="number">Page size.</ResponseField>
+    <ResponseField name="total" type="number">Total matching records.</ResponseField>
+    <ResponseField name="totalPages" type="number">Total pages.</ResponseField>
+    <ResponseField name="hasNextPage" type="boolean" />
+    <ResponseField name="hasPreviousPage" type="boolean" />
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="supportsConfigColumns" type="boolean" required>
+  `false` if the tenant database does not yet have the `on_finish_*` columns (older schema).
+</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/obras?page=1&limit=20&orderBy=n&status=in-process' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "detalleObras": [
+        {
+          "id": "a1b2c3d4-...",
+          "n": 1,
+          "designacionYUbicacion": "Escuela N° 42 — Barrio Norte",
+          "supDeObraM2": 1200,
+          "entidadContratante": "MUNICIPIO",
+          "mesBasicoDeContrato": "enero 2023",
+          "iniciacion": "marzo 2023",
+          "contratoMasAmpliaciones": 5000000,
+          "certificadoALaFecha": 2500000,
+          "saldoACertificar": 2500000,
+          "segunContrato": 4800000,
+          "prorrogasAcordadas": 200000,
+          "plazoTotal": 365,
+          "plazoTransc": 180,
+          "porcentaje": 50,
+          "updatedAt": "2024-06-15T10:30:00Z",
+          "customData": {},
+          "onFinishFirstMessage": null,
+          "onFinishSecondMessage": null,
+          "onFinishSecondSendAt": null
+        }
+      ],
+      "pagination": {
+        "page": 1,
+        "limit": 20,
+        "total": 1,
+        "totalPages": 1,
+        "hasNextPage": false,
+        "hasPreviousPage": false
+      },
+      "supportsConfigColumns": true
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Bulk upsert obras
+
+<ParamField path="PUT /api/obras" type="string" />
+
+Replaces the entire obras list for the tenant. Records present in the current tenant but absent from the payload are deleted. New obras automatically have tenant-level defaults applied (folders, tablas).
+
+When an obra transitions from `porcentaje < 100` to `porcentaje = 100`, an `obra.completed` workflow event is emitted and any configured flujo actions are executed.
+
+### Request body
+
+<ParamField body="detalleObras" type="Obra[]" required>
+  Full array of obras to persist. Each item must conform to the obra schema.
+  <Expandable title="Obra input fields">
+    <ParamField body="n" type="number" required>Obra number — unique per tenant.</ParamField>
+    <ParamField body="designacionYUbicacion" type="string" required>Name and location.</ParamField>
+    <ParamField body="supDeObraM2" type="number" required>Surface area (m²).</ParamField>
+    <ParamField body="entidadContratante" type="string" required>Contracting entity.</ParamField>
+    <ParamField body="mesBasicoDeContrato" type="string" required>Base contract month.</ParamField>
+    <ParamField body="iniciacion" type="string" required>Start date.</ParamField>
+    <ParamField body="contratoMasAmpliaciones" type="number" required>Contract value including extensions.</ParamField>
+    <ParamField body="certificadoALaFecha" type="number" required>Amount certified to date.</ParamField>
+    <ParamField body="saldoACertificar" type="number" required>Remaining amount to certify.</ParamField>
+    <ParamField body="segunContrato" type="number" required>Value per original contract.</ParamField>
+    <ParamField body="prorrogasAcordadas" type="number" required>Agreed extensions.</ParamField>
+    <ParamField body="plazoTotal" type="number" required>Total contract term (days).</ParamField>
+    <ParamField body="plazoTransc" type="number" required>Elapsed term (days).</ParamField>
+    <ParamField body="porcentaje" type="number" required>Completion percentage.</ParamField>
+    <ParamField body="customData" type="object">Custom column values (keys must match tenant's enabled custom column IDs).</ParamField>
+  </Expandable>
+</ParamField>
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X PUT 'https://<domain>/api/obras' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "detalleObras": [
+          {
+            "n": 1,
+            "designacionYUbicacion": "Escuela N° 42 — Barrio Norte",
+            "supDeObraM2": 1200,
+            "entidadContratante": "MUNICIPIO",
+            "mesBasicoDeContrato": "enero 2023",
+            "iniciacion": "marzo 2023",
+            "contratoMasAmpliaciones": 5000000,
+            "certificadoALaFecha": 2500000,
+            "saldoACertificar": 2500000,
+            "segunContrato": 4800000,
+            "prorrogasAcordadas": 200000,
+            "plazoTotal": 365,
+            "plazoTransc": 180,
+            "porcentaje": 50
+          }
+        ]
+      }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    { "ok": true }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Get a single obra
+
+<ParamField path="GET /api/obras/{id}" type="string" />
+
+Returns a single obra by UUID.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the obra.
+</ParamField>
+
+### Response
+
+<ResponseField name="obra" type="Obra" required>
+  The obra object. See field definitions under [List obras](#list-obras).
+</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/obras/a1b2c3d4-...' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "obra": {
+        "id": "a1b2c3d4-...",
+        "n": 1,
+        "designacionYUbicacion": "Escuela N° 42 — Barrio Norte",
+        "porcentaje": 50
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Replace a single obra
+
+<ParamField path="PUT /api/obras/{id}" type="string" />
+
+Fully replaces all fields of an existing obra. Completion side-effects (workflow events, flujo actions) fire if `porcentaje` transitions to 100.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the obra.</ParamField>
+
+### Request body
+
+All obra fields (same schema as the bulk PUT body items, excluding `n` as identifier — the `id` path param is authoritative).
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+
+---
+
+## Partially update a single obra
+
+<ParamField path="PATCH /api/obras/{id}" type="string" />
+
+Updates only the supplied fields of an obra. Omitted fields are left unchanged. Completion side-effects fire if `porcentaje` transitions to or from 100.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the obra.</ParamField>
+
+### Request body
+
+Any subset of obra fields.
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X PATCH 'https://<domain>/api/obras/a1b2c3d4-...' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{ "porcentaje": 100 }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    { "ok": true }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Delete a single obra
+
+<ParamField path="DELETE /api/obras/{id}" type="string" />
+
+Permanently deletes an obra and all its related data (cascaded by the database).
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the obra.</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>Always `true` on success.</ResponseField>
+
+---
+
+## Bulk patch obras
+
+<ParamField path="PATCH /api/obras/bulk" type="string" />
+
+Upserts multiple obras in a single request. Unlike `PUT /api/obras`, this endpoint does **not** delete obras absent from the payload. Defaults are applied to newly created obras.
+
+### Request body
+
+<ParamField body="updates" type="Obra[]" required>
+  Array of obra objects to upsert. Each item must include either `id` (UUID) or a positive `n` value as identifier. Minimum 1 item.
+</ParamField>
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+<ResponseField name="count" type="number" required>Number of obras processed.</ResponseField>
+<ResponseField name="supportsConfigColumns" type="boolean" required>Whether `on_finish_*` columns are available in this tenant's schema.</ResponseField>
+
+---
+
+## Get certificates for an obra
+
+<ParamField path="GET /api/obras/{id}/certificates" type="string" />
+
+Returns all certificates linked to the specified obra, ordered by certificate number ascending.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the obra.</ParamField>
+
+### Response
+
+<ResponseField name="certificates" type="Certificate[]" required>
+  Array of certificate objects.
+  <Expandable title="Certificate properties">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="obra_id" type="string">Parent obra UUID.</ResponseField>
+    <ResponseField name="n_exp" type="string">Expedient number.</ResponseField>
+    <ResponseField name="n_certificado" type="number">Certificate sequence number.</ResponseField>
+    <ResponseField name="monto" type="number">Certificate amount.</ResponseField>
+    <ResponseField name="mes" type="string">Billing month.</ResponseField>
+    <ResponseField name="estado" type="string">Status (e.g. `CERTIFICADO`).</ResponseField>
+    <ResponseField name="created_at" type="string">ISO 8601 creation timestamp.</ResponseField>
+    <ResponseField name="updated_at" type="string">ISO 8601 update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="total" type="number" required>Sum of all certificate amounts.</ResponseField>
+
+---
+
+## Create a certificate for an obra
+
+<ParamField path="POST /api/obras/{id}/certificates" type="string" />
+
+Creates a new certificate linked to an obra.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the obra.</ParamField>
+
+### Request body
+
+<ParamField body="n_exp" type="string" required>Expedient number.</ParamField>
+<ParamField body="n_certificado" type="number" required>Certificate sequence number.</ParamField>
+<ParamField body="monto" type="number" required>Certificate amount.</ParamField>
+<ParamField body="mes" type="string" required>Billing month.</ParamField>
+<ParamField body="estado" type="string" default="CERTIFICADO">Certificate status.</ParamField>
+
+### Response
+
+<ResponseField name="certificate" type="Certificate" required>The newly created certificate object.</ResponseField>
+
+---
+
+## Get findings for an obra
+
+<ParamField path="GET /api/obras/{id}/findings" type="string" />
+
+Returns reporting findings (anomalies, alerts, or insights) for the specified obra.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the obra.</ParamField>
+
+### Query parameters
+
+<ParamField query="period" type="string">
+  Optional period key to scope findings to a specific reporting period.
+</ParamField>
+
+### Response
+
+<ResponseField name="findings" type="object[]" required>
+  Array of finding objects. Structure depends on the reporting rules configured for the tenant.
+</ResponseField>
+
+---
+
+## Get material orders for an obra
+
+<ParamField path="GET /api/obras/{id}/materials" type="string" />
+
+Returns all material purchase orders associated with an obra, including their line items.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the obra.</ParamField>
+
+### Response
+
+<ResponseField name="orders" type="MaterialOrder[]" required>
+  Array of material order objects.
+  <Expandable title="MaterialOrder properties">
+    <ResponseField name="id" type="string">UUID.</ResponseField>
+    <ResponseField name="nroOrden" type="string | null">Order number.</ResponseField>
+    <ResponseField name="solicitante" type="string | null">Requestor name.</ResponseField>
+    <ResponseField name="gestor" type="string | null">Manager name.</ResponseField>
+    <ResponseField name="proveedor" type="string | null">Supplier name.</ResponseField>
+    <ResponseField name="docBucket" type="string | null">Storage bucket name for attached document.</ResponseField>
+    <ResponseField name="docPath" type="string | null">Storage path for attached document.</ResponseField>
+    <ResponseField name="items" type="object[]">
+      Line items.
+      <Expandable title="Item properties">
+        <ResponseField name="cantidad" type="number">Quantity.</ResponseField>
+        <ResponseField name="unidad" type="string">Unit of measure.</ResponseField>
+        <ResponseField name="material" type="string">Material description.</ResponseField>
+        <ResponseField name="precioUnitario" type="number">Unit price.</ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Create a material order for an obra
+
+<ParamField path="POST /api/obras/{id}/materials" type="string" />
+
+Creates a new material purchase order with line items.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>UUID of the obra.</ParamField>
+
+### Request body
+
+<ParamField body="nroOrden" type="string">Order number.</ParamField>
+<ParamField body="solicitante" type="string">Requestor name.</ParamField>
+<ParamField body="gestor" type="string">Manager name.</ParamField>
+<ParamField body="proveedor" type="string">Supplier name.</ParamField>
+<ParamField body="docBucket" type="string">Storage bucket for attached document.</ParamField>
+<ParamField body="docPath" type="string">Storage path for attached document.</ParamField>
+<ParamField body="items" type="object[]" required>
+  Line items. Must contain at least one item.
+  <Expandable title="Item fields">
+    <ParamField body="cantidad" type="number" required>Quantity.</ParamField>
+    <ParamField body="unidad" type="string" required>Unit of measure.</ParamField>
+    <ParamField body="material" type="string" required>Material description.</ParamField>
+    <ParamField body="precioUnitario" type="number">Unit price.</ParamField>
+  </Expandable>
+</ParamField>
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+<ResponseField name="order" type="object" required>
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">UUID of the newly created order.</ResponseField>
+  </Expandable>
+</ResponseField>

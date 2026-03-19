@@ -1,0 +1,195 @@
+---
+title: "Tenants"
+description: "Endpoints for switching the active tenant context and retrieving tenant usage metrics."
+---
+
+Sintesis supports users with membership in multiple tenants. The active tenant is stored in a session cookie and determines which data is visible across all other API endpoints.
+
+---
+
+## Switch active tenant
+
+<ParamField path="POST /api/tenants/{tenantId}/switch" type="string" />
+
+Sets the active tenant for the current session. The user must be a member of the target tenant, or be a superadmin.
+
+On success, the response sets the `sintesis_active_tenant` cookie (30-day expiry) and returns `{ "success": true }`.
+
+### Path parameters
+
+<ParamField path="tenantId" type="string" required>
+  UUID of the tenant to activate. Must be a valid UUID v4 format.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Always `true` on success.
+</ResponseField>
+
+### Error responses
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `tenantId` is missing or not a valid UUID. |
+| `401` | Not authenticated. |
+| `403` | User is not a member of the specified tenant and is not a superadmin. |
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X POST 'https://<domain>/api/tenants/target-tenant-uuid-.../switch' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    { "success": true }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Switch active tenant (redirect)
+
+<ParamField path="GET /api/tenants/{tenantId}/switch" type="string" />
+
+Sets the active tenant and redirects the browser to `/excel`. Designed for use in navigation links rather than programmatic API calls.
+
+- If the user is not authenticated, redirects to `/`.
+- If the user is not a member of the tenant and is not a superadmin, redirects to `/onboarding`.
+- On success, sets the `sintesis_active_tenant` cookie and redirects to `/excel`.
+
+### Path parameters
+
+<ParamField path="tenantId" type="string" required>
+  UUID of the tenant to activate.
+</ParamField>
+
+---
+
+## Get tenant usage
+
+<ParamField path="GET /api/tenant-usage" type="string" />
+
+Returns the current plan and usage counters for the authenticated user's active tenant.
+
+### Response
+
+<ResponseField name="tenantId" type="string" required>Active tenant UUID.</ResponseField>
+<ResponseField name="plan" type="object" required>
+  The tenant's subscription plan.
+  <Expandable title="Plan properties">
+    <ResponseField name="name" type="string">Plan name.</ResponseField>
+    <ResponseField name="limits" type="object">
+      Usage limits for the plan.
+      <Expandable title="Limit properties">
+        <ResponseField name="storageBytes" type="number">Maximum storage in bytes.</ResponseField>
+        <ResponseField name="aiTokens" type="number">Maximum AI token usage.</ResponseField>
+        <ResponseField name="whatsappMessages" type="number">Maximum WhatsApp messages.</ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+<ResponseField name="usage" type="object" required>
+  Current usage counters.
+  <Expandable title="Usage properties">
+    <ResponseField name="storageBytes" type="number">Current storage used in bytes.</ResponseField>
+    <ResponseField name="aiTokens" type="number">Current AI tokens consumed.</ResponseField>
+    <ResponseField name="whatsappMessages" type="number">Current WhatsApp messages sent.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl 'https://<domain>/api/tenant-usage' \
+      --cookie 'sb-access-token=<session>'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "tenantId": "tenant-uuid-...",
+      "plan": {
+        "name": "Pro",
+        "limits": {
+          "storageBytes": 10737418240,
+          "aiTokens": 1000000,
+          "whatsappMessages": 500
+        }
+      },
+      "usage": {
+        "storageBytes": 524288000,
+        "aiTokens": 12340,
+        "whatsappMessages": 7
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Increment tenant usage
+
+<ParamField path="POST /api/tenant-usage" type="string" />
+
+Applies a usage delta to the tenant's current counters. Used internally by background jobs and server actions that consume metered resources.
+
+<Warning>
+If the updated value would exceed any plan limit, the endpoint returns `402 Payment Required` and the counter is **not** incremented.
+</Warning>
+
+### Request body
+
+<ParamField body="storageBytesDelta" type="number">Bytes to add (positive) or remove (negative) from storage usage.</ParamField>
+<ParamField body="aiTokensDelta" type="number">AI tokens to add to usage.</ParamField>
+<ParamField body="whatsappMessagesDelta" type="number">WhatsApp messages to add to usage.</ParamField>
+<ParamField body="reason" type="string">Optional human-readable reason for the adjustment (logged in usage event history).</ParamField>
+<ParamField body="metadata" type="object">Optional metadata object logged with the usage event.</ParamField>
+
+<Note>
+At least one delta field must be non-zero.
+</Note>
+
+### Response
+
+<ResponseField name="ok" type="boolean" required>Always `true` on success.</ResponseField>
+<ResponseField name="plan" type="object" required>Updated plan object (same structure as GET response).</ResponseField>
+<ResponseField name="usage" type="object" required>Updated usage counters (same structure as GET response).</ResponseField>
+
+### Error responses
+
+| Status | Error code | Description |
+|--------|------------|-------------|
+| `400` | — | No delta fields provided or values are not finite numbers. |
+| `402` | `storage_limit_exceeded` | Storage limit would be exceeded. |
+| `402` | `ai_limit_exceeded` | AI token limit would be exceeded. |
+| `402` | `whatsapp_limit_exceeded` | WhatsApp message limit would be exceeded. |
+| `403` | `insufficient_privilege` | The operation is not permitted for this user's role. |
+
+<Tabs>
+  <Tab title="Request">
+    ```bash
+    curl -X POST 'https://<domain>/api/tenant-usage' \
+      --cookie 'sb-access-token=<session>' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "storageBytesDelta": 2097152,
+        "reason": "document_upload",
+        "metadata": { "fileId": "doc-uuid-..." }
+      }'
+    ```
+  </Tab>
+  <Tab title="Response">
+    ```json
+    {
+      "ok": true,
+      "plan": { "name": "Pro", "limits": { "storageBytes": 10737418240 } },
+      "usage": { "storageBytes": 526385152, "aiTokens": 12340, "whatsappMessages": 7 }
+    }
+    ```
+  </Tab>
+</Tabs>

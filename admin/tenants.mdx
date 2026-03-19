@@ -1,0 +1,153 @@
+---
+title: "Tenants"
+description: "How organizations (tenants) are created, configured, and managed in Sintesis."
+---
+
+In Sintesis, every company or team that uses the platform is represented as a **tenant** — a fully isolated organization. All data, users, roles, documents, and usage limits are scoped to a tenant. Users can belong to one or more tenants and switch between them without logging out.
+
+## What is a tenant?
+
+A tenant maps to a single construction company or organizational unit. The core `tenants` table stores a minimal record:
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | `uuid` | Primary key, auto-generated |
+| `name` | `text` | Unique display name for the organization |
+| `created_at` | `timestamptz` | When the tenant was created |
+
+Every other table in the schema — obras, certificates, memberships, roles, usage records — carries a `tenant_id` foreign key that ties rows back to their owning tenant. Row Level Security (RLS) policies on each table use helper functions (`is_member_of`, `is_admin_of`) to ensure users can only query rows that belong to a tenant they are a member of.
+
+```sql
+-- Helper used by most RLS policies
+CREATE OR REPLACE FUNCTION public.is_member_of(tenant uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.memberships m
+    WHERE m.tenant_id = tenant AND m.user_id = auth.uid()
+  );
+$$;
+```
+
+<Note>
+The system ships with a well-known **Default Tenant** (`id = 00000000-0000-0000-0000-000000000001`) used as a fallback for super-admin access. Normal users are never automatically assigned to it — assignment is always explicit via invitation or onboarding.
+</Note>
+
+## Tenant creation flow
+
+New tenants are created during the onboarding flow. Any authenticated user can create a tenant; the user who creates it automatically becomes its first `owner`.
+
+<Steps>
+  <Step title="User signs up or logs in">
+    The user authenticates via Supabase Auth. A `profiles` record is created linked to `auth.users`.
+  </Step>
+  <Step title="User creates a tenant">
+    The onboarding page calls `INSERT INTO tenants (name) VALUES (...)`. The RLS policy for inserts requires only that `auth.uid() IS NOT NULL`, so any authenticated user can create a tenant.
+
+    ```sql
+    CREATE POLICY "insert tenants" ON public.tenants
+      FOR INSERT
+      WITH CHECK (auth.uid() IS NOT NULL);
+
+    GRANT INSERT ON public.tenants TO authenticated;
+    ```
+  </Step>
+  <Step title="Owner membership is bootstrapped">
+    After the tenant row is inserted, the user inserts a membership record for themselves with `role = 'owner'`. The RLS policy for this "bootstrap" case allows the insert only when the tenant has no existing members yet, preventing takeovers of already-claimed tenants.
+
+    ```sql
+    CREATE POLICY "bootstrap owner membership" ON public.memberships
+      FOR INSERT
+      WITH CHECK (
+        user_id = auth.uid()
+        AND role = 'owner'
+        AND NOT EXISTS (
+          SELECT 1 FROM public.memberships m2
+          WHERE m2.tenant_id = memberships.tenant_id
+        )
+      );
+    ```
+  </Step>
+  <Step title="Tenant is assigned the Starter plan">
+    A row is inserted into `tenant_subscriptions` linking the new tenant to the `starter` plan. See [Subscription Plans](/admin/subscription-plans) for details.
+  </Step>
+</Steps>
+
+<Warning>
+Earlier versions of the codebase auto-enrolled every new user into the Default Tenant via a `on_profile_created_add_membership` trigger. Migration `0042` removed this behavior. Users are now only added to a tenant through explicit invitation or self-initiated onboarding.
+</Warning>
+
+## Tenant isolation model
+
+Isolation is enforced at the database layer through PostgreSQL RLS. The key properties are:
+
+- **Read isolation**: All `SELECT` policies check `is_member_of(tenant_id)`, so a user can never read another tenant's rows — even with a direct API call.
+- **Write isolation**: `INSERT` and `UPDATE` policies check either `is_member_of` or `is_admin_of`, depending on the required privilege level.
+- **Cascade deletes**: All tenant-scoped tables use `ON DELETE CASCADE` on the `tenant_id` foreign key, so deleting a tenant removes all associated data.
+- **No cross-tenant queries**: There are no application-level joins across tenants. The `tenant_id` column is always filtered explicitly.
+
+```sql
+-- Example: instruments are read-isolated per tenant
+CREATE POLICY "read instruments in tenant" ON public.instruments
+  FOR SELECT USING (public.is_member_of(tenant_id));
+```
+
+## Active tenant selection
+
+When a user belongs to multiple tenants, Sintesis uses a cookie (`active_tenant_id`) to track which tenant is currently active. The `resolveTenantMembership` function in `lib/tenant-selection.ts` implements the resolution order:
+
+1. The tenant matching the `active_tenant_id` cookie value (if it exists and the user is a member)
+2. The first membership in the ordered list
+3. For super-admins without any memberships, the Default Tenant is used as a fallback
+
+```typescript
+// lib/tenant-selection.ts
+export async function resolveTenantMembership<T extends MembershipLike>(
+  memberships: T[] | null | undefined,
+  options: ResolveOptions = {}
+) {
+  // Checks cookie, falls back to first membership, then default for superadmins
+}
+```
+
+### Switching the active tenant
+
+Users and super-admins can switch the active tenant by calling the switch API endpoint. This sets the `active_tenant_id` cookie to the new tenant ID.
+
+```http
+POST /api/tenants/{tenantId}/switch
+```
+
+The endpoint validates that the requesting user is either a member of the target tenant or a super-admin before setting the cookie. The cookie is scoped to the root path with a 30-day TTL and `SameSite=lax`.
+
+## Super-admin tenant management
+
+The `/admin/tenants` page is only accessible to users with the `admin` membership role or the `is_superadmin` flag on their profile.
+
+<Tabs>
+  <Tab title="Super-admin view">
+    Super-admins see **all tenants** across the entire platform. The page uses the Supabase admin client to bypass RLS and list every tenant, sorted by creation date.
+  </Tab>
+  <Tab title="Admin/Owner view">
+    Users with `owner` or `admin` membership role see only the tenants they administer. The query filters to `tenant_id IN (their membership IDs)` and uses the user's own client (subject to RLS).
+  </Tab>
+</Tabs>
+
+For each tenant, the panel shows:
+
+| Field | Source |
+|---|---|
+| Tenant name | `tenants.name` |
+| Tenant ID | `tenants.id` |
+| Creation date | `tenants.created_at` |
+| Owner name | Joined from `memberships` where `role = 'owner'` + `profiles.full_name` |
+| Pending invitations | Count of `invitations` with `status = 'pending'` |
+
+Admins can also use the **"Switch to this organization"** button to immediately set their `active_tenant_id` cookie to any tenant they have access to — useful for debugging tenant-specific issues without requiring the impersonation flow.
+
+## API secrets
+
+The `/admin/tenant-secrets` route (access-controlled to `admin` role) is where API credentials used by third-party integrations are stored per tenant. This route is separate from general tenant settings to enforce the principle of least privilege — only admins can view or rotate secrets.
+
+<Warning>
+Access to `/admin/tenant-secrets` is restricted to users with `allowedRoles: ["admin"]` in the route access configuration. Regular members and even owners without the `admin` membership role cannot view this page.
+</Warning>
