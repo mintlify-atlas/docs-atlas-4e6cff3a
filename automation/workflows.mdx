@@ -371,9 +371,10 @@ CREATE POLICY "Users can view flujo executions in their tenant"
 
 | Variable | Description |
 |---|---|
-| `WORKFLOWS_DISABLED` | Set to `1` to disable workflow engine (falls back to direct DB insert) |
+| `WORKFLOWS_DISABLED` | Set to `1` to disable the Vercel Workflow engine (falls back to direct in-app DB insert) |
 | `WORKFLOWS_ENABLED` | Set to `1` to force-enable workflows regardless of other flags |
 | `WORKFLOW_TEST_DISABLED` | Set to `1` to disable the `/api/workflow-test` endpoint |
+| `WORKFLOW_TEST_ENABLED` | Set to `0` to disable the test endpoint (alternative to `WORKFLOW_TEST_DISABLED=1`) |
 | `RESEND_API_KEY` | API key for sending emails via Resend |
 | `RESEND_FROM_EMAIL` | Sender address used by the email workflow steps |
 | `SUPABASE_SERVICE_ROLE_KEY` | Used by workflow steps to call the Supabase REST API directly |

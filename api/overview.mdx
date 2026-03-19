@@ -45,7 +45,7 @@ Sintesis is a multi-tenant platform. Every authenticated request is automaticall
 
 The active tenant is resolved in this order:
 
-1. The `sintesis_active_tenant` cookie (set when the user explicitly switches tenants via `POST /api/tenants/{tenantId}/switch`).
+1. The `active_tenant_id` cookie (set when the user explicitly switches tenants via `POST /api/tenants/{tenantId}/switch`).
 2. The user's oldest membership record as a fallback.
 
 All database queries include a `tenant_id` filter. A user cannot read or modify data belonging to another tenant, even if they construct a request manually — Supabase Row Level Security (RLS) enforces the same constraints at the database layer.

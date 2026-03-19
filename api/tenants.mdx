@@ -13,7 +13,7 @@ Sintesis supports users with membership in multiple tenants. The active tenant i
 
 Sets the active tenant for the current session. The user must be a member of the target tenant, or be a superadmin.
 
-On success, the response sets the `sintesis_active_tenant` cookie (30-day expiry) and returns `{ "success": true }`.
+On success, the response sets the `active_tenant_id` cookie (30-day expiry) and returns `{ "success": true }`.
 
 ### Path parameters
 
@@ -59,7 +59,7 @@ Sets the active tenant and redirects the browser to `/excel`. Designed for use i
 
 - If the user is not authenticated, redirects to `/`.
 - If the user is not a member of the tenant and is not a superadmin, redirects to `/onboarding`.
-- On success, sets the `sintesis_active_tenant` cookie and redirects to `/excel`.
+- On success, sets the `active_tenant_id` cookie and redirects to `/excel`.
 
 ### Path parameters
 
@@ -113,11 +113,11 @@ Returns the current plan and usage counters for the authenticated user's active 
     {
       "tenantId": "tenant-uuid-...",
       "plan": {
-        "name": "Pro",
+        "name": "Growth",
         "limits": {
-          "storageBytes": 10737418240,
-          "aiTokens": 1000000,
-          "whatsappMessages": 500
+          "storageBytes": null,
+          "aiTokens": null,
+          "whatsappMessages": null
         }
       },
       "usage": {
@@ -187,7 +187,7 @@ At least one delta field must be non-zero.
     ```json
     {
       "ok": true,
-      "plan": { "name": "Pro", "limits": { "storageBytes": 10737418240 } },
+      "plan": { "name": "Growth", "limits": { "storageBytes": null, "aiTokens": null, "whatsappMessages": null } },
       "usage": { "storageBytes": 526385152, "aiTokens": 12340, "whatsappMessages": 7 }
     }
     ```

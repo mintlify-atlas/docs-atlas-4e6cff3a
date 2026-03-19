@@ -7,7 +7,7 @@ description: "Set up a full local Sintesis development environment with Next.js,
 
 Before you begin, install the following tools:
 
-<Columns cols={2}>
+<CardGroup cols={2}>
   <Card title="Node.js 20+" icon="node-js" href="https://nodejs.org">
     Sintesis targets the Node.js LTS release. Use [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm) to manage versions.
   </Card>
@@ -20,7 +20,7 @@ Before you begin, install the following tools:
   <Card title="Supabase CLI" icon="database" href="https://supabase.com/docs/guides/cli">
     Manages local migrations and the local Supabase stack. Install with `brew install supabase/tap/supabase` or `npx supabase`.
   </Card>
-</Columns>
+</CardGroup>
 
 <Note>
 The Supabase CLI is also available as a dev dependency (`supabase@^2.76.8`) in this project. All `pnpm supabase:*` scripts invoke it directly through the local binary, so a global install is optional.

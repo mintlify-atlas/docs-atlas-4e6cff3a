@@ -47,7 +47,17 @@ For local development the `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_A
 
 ## Google OAuth
 
-Required only if you enable Google sign-in. Configured in `supabase/config.toml` under `[auth.external.google]`.
+Required only if you enable Google sign-in. These are configured inside `supabase/config.toml` under `[auth.external.google]` — **not** in `.env.local`. The Supabase CLI reads them from the config file via the `env(...)` syntax:
+
+```toml supabase/config.toml
+[auth.external.google]
+enabled = true
+client_id = "env(GOOGLE_CLIENT_ID)"
+secret = "env(GOOGLE_CLIENT_SECRET)"
+redirect_uri = ""
+```
+
+Add the following to your shell environment or a `.env` file that the Supabase CLI can read:
 
 <ParamField path="GOOGLE_CLIENT_ID" type="string">
   OAuth 2.0 client ID from the [Google Cloud Console](https://console.cloud.google.com/apis/credentials). Create an **OAuth client ID** of type **Web application** and copy the client ID.
@@ -58,7 +68,7 @@ Required only if you enable Google sign-in. Configured in `supabase/config.toml`
 </ParamField>
 
 <Note>
-For local development, add `http://127.0.0.1:54321/auth/v1/callback` as an authorised redirect URI in your Google Cloud OAuth credential.
+For local development, add `http://127.0.0.1:54321/auth/v1/callback` as an authorised redirect URI in your Google Cloud OAuth credential. These variables are consumed by the Supabase local stack only — they are not read by the Next.js server.
 </Note>
 
 ## Email — Resend
